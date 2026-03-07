@@ -64,6 +64,16 @@ except ImportError:
 SCOPES_READONLY = ['https://www.googleapis.com/auth/drive.readonly']
 SCOPES_WRITE = ['https://www.googleapis.com/auth/drive']  # For deletion
 
+# Directories
+STATE_DIR = 'state'
+REPORTS_DIR = 'reports'
+LOGS_DIR = 'logs'
+
+# Create directories
+os.makedirs(STATE_DIR, exist_ok=True)
+os.makedirs(REPORTS_DIR, exist_ok=True)
+os.makedirs(LOGS_DIR, exist_ok=True)
+
 # Configure logger (stdout only initially, file logging added later)
 logger.remove()
 logger.add(
@@ -76,7 +86,9 @@ logger.add(
 def setup_file_logging(folder_id, start_time):
     """Set up file logging for the session."""
     timestamp = start_time.strftime('%Y%m%d_%H%M%S')
-    log_filename = f"{folder_id}_session_{timestamp}.log"
+    log_filename = os.path.join(LOGS_DIR, f"{folder_id}_session_{timestamp}.log")
+
+    logger.debug(f"Setting up file logging to {log_filename}")
 
     # Add file handler
     logger.add(
@@ -129,28 +141,40 @@ VERY_LARGE_FILE_SIZE = 500 * 1024 * 1024  # 500 MB
 
 def authenticate(write_access=False):
     """Authenticate with Google Drive API."""
+    access_type = "write" if write_access else "read-only"
+    logger.debug(f"Authenticating with Google Drive API ({access_type} access)")
+
     creds = None
     scopes = SCOPES_WRITE if write_access else SCOPES_READONLY
     token_file = 'token_write.pickle' if write_access else 'token.pickle'
 
+    logger.debug(f"Using token file: {token_file}")
+
     if os.path.exists(token_file):
+        logger.debug(f"Loading existing credentials from {token_file}")
         with open(token_file, 'rb') as token:
             creds = pickle.load(token)
 
     if not creds or not creds.valid:
         if creds and creds.expired and creds.refresh_token:
+            logger.info("Refreshing expired credentials")
             creds.refresh(Request())
         else:
             if not os.path.exists('credentials.json'):
                 logger.error("credentials.json not found!")
+                logger.error("Please download OAuth credentials from Google Cloud Console")
                 sys.exit(1)
+
+            logger.info("Starting OAuth flow - your browser will open")
             flow = InstalledAppFlow.from_client_secrets_file(
                 'credentials.json', scopes)
             creds = flow.run_local_server(port=0)
 
+        logger.debug(f"Saving credentials to {token_file}")
         with open(token_file, 'wb') as token:
             pickle.dump(creds, token)
 
+    logger.debug("Building Google Drive service")
     return build('drive', 'v3', credentials=creds)
 
 # ============================================================================
@@ -585,24 +609,31 @@ class FileAnalyzer:
         """Scan a specific folder and its subfolders recursively."""
         logger.info(f"Starting folder scan: {folder_id}")
         logger.info(f"Maximum files to scan: {max_files}")
+        logger.debug(f"Scan mode: Recursive (includes subfolders)")
 
         # Get folder info
         try:
+            logger.debug(f"Fetching folder metadata for {folder_id}")
             folder_info = self.service.files().get(
                 fileId=folder_id,
                 fields="id, name, mimeType"
             ).execute()
-            logger.info(f"Scanning folder: {folder_info.get('name', 'Unknown')}")
+            folder_name = folder_info.get('name', 'Unknown')
+            logger.info(f"Scanning folder: {folder_name}")
+            logger.debug(f"Folder type: {folder_info.get('mimeType', 'Unknown')}")
         except Exception as e:
             logger.error(f"Error getting folder info: {e}")
+            logger.error("Please check that the folder ID is correct and you have access")
             return
 
         # List to track folders to scan
         folders_to_scan = [folder_id]
         scanned_count = 0
 
+        logger.debug("Starting recursive folder scan")
         while folders_to_scan and scanned_count < max_files:
             current_folder = folders_to_scan.pop(0)
+            logger.debug(f"Scanning folder ID: {current_folder} ({len(folders_to_scan)} remaining in queue)")
 
             # Get all items in current folder
             page_token = None
@@ -969,16 +1000,23 @@ def extract_file_id_from_link(link):
 
 def find_latest_report(folder_id):
     """Find the most recent cleanup report for a given folder ID."""
+    logger.debug(f"Searching for reports in {REPORTS_DIR} directory")
+
     # Pattern for report files
-    pattern = f"drive_cleanup_report_{folder_id}_*.txt"
+    pattern = os.path.join(REPORTS_DIR, f"drive_cleanup_report_{folder_id}_*.txt")
     reports = glob.glob(pattern)
 
+    logger.debug(f"Found {len(reports)} report(s) matching pattern")
+
     if not reports:
+        logger.warning(f"No reports found for folder {folder_id}")
         return None
 
     # Sort by modification time (newest first)
     reports.sort(key=os.path.getmtime, reverse=True)
-    return reports[0]
+    latest = reports[0]
+    logger.info(f"Using latest report: {os.path.basename(latest)}")
+    return latest
 
 def get_single_key():
     """Get a single key press without requiring Enter."""
@@ -1002,28 +1040,35 @@ def get_single_key():
 
 def log_deleted_file(folder_id, file_name, file_link, file_size):
     """Log a deleted file to the deleted files list."""
-    log_file = f"{folder_id}_deleted_files.txt"
+    log_file = os.path.join(STATE_DIR, f"{folder_id}_deleted_files.txt")
     timestamp = datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S UTC')
+
+    logger.debug(f"Logging deleted file to {log_file}: {file_name}")
 
     with open(log_file, 'a', encoding='utf-8') as f:
         f.write(f"{timestamp} | {file_name} | {file_size} | {file_link}\n")
 
 def log_skipped_file(folder_id, file_name, file_link, file_size):
     """Log a skipped file to the skipped files list."""
-    log_file = f"{folder_id}_skipped_files.txt"
+    log_file = os.path.join(STATE_DIR, f"{folder_id}_skipped_files.txt")
     timestamp = datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S UTC')
+
+    logger.debug(f"Logging skipped file to {log_file}: {file_name}")
 
     with open(log_file, 'a', encoding='utf-8') as f:
         f.write(f"{timestamp} | {file_name} | {file_size} | {file_link}\n")
 
 def load_processed_files(folder_id):
     """Load already deleted and skipped files."""
+    logger.debug(f"Loading processed files for folder {folder_id}")
+
     deleted_files = set()
     skipped_files = set()
 
     # Load deleted files
-    deleted_log = f"{folder_id}_deleted_files.txt"
+    deleted_log = os.path.join(STATE_DIR, f"{folder_id}_deleted_files.txt")
     if os.path.exists(deleted_log):
+        logger.debug(f"Loading deleted files from {deleted_log}")
         with open(deleted_log, 'r', encoding='utf-8') as f:
             for line in f:
                 parts = line.strip().split(' | ')
@@ -1032,10 +1077,14 @@ def load_processed_files(folder_id):
                     file_id = extract_file_id_from_link(file_link)
                     if file_id:
                         deleted_files.add(file_id)
+        logger.debug(f"Loaded {len(deleted_files)} deleted file IDs")
+    else:
+        logger.debug(f"No deleted files log found at {deleted_log}")
 
     # Load skipped files
-    skipped_log = f"{folder_id}_skipped_files.txt"
+    skipped_log = os.path.join(STATE_DIR, f"{folder_id}_skipped_files.txt")
     if os.path.exists(skipped_log):
+        logger.debug(f"Loading skipped files from {skipped_log}")
         with open(skipped_log, 'r', encoding='utf-8') as f:
             for line in f:
                 parts = line.strip().split(' | ')
@@ -1044,6 +1093,9 @@ def load_processed_files(folder_id):
                     file_id = extract_file_id_from_link(file_link)
                     if file_id:
                         skipped_files.add(file_id)
+        logger.debug(f"Loaded {len(skipped_files)} skipped file IDs")
+    else:
+        logger.debug(f"No skipped files log found at {skipped_log}")
 
     return deleted_files, skipped_files
 
@@ -1126,8 +1178,8 @@ def interactive_cleanup(service, report_file, folder_id):
     logger.info("")
 
     # Log files
-    deleted_log = f"{folder_id}_deleted_files.txt"
-    skipped_log = f"{folder_id}_skipped_files.txt"
+    deleted_log = os.path.join(STATE_DIR, f"{folder_id}_deleted_files.txt")
+    skipped_log = os.path.join(STATE_DIR, f"{folder_id}_skipped_files.txt")
 
     logger.info(f"Deleted files will be logged to: {deleted_log}")
     logger.info(f"Skipped files will be logged to: {skipped_log}")
@@ -1174,11 +1226,14 @@ def interactive_cleanup(service, report_file, folder_id):
                 # Delete file
                 if not entry['file_id']:
                     logger.error("Cannot delete: File ID not found")
+                    logger.error("This should not happen - please report as bug")
                     break
 
+                logger.debug(f"Attempting to delete file ID: {entry['file_id']}")
                 try:
                     service.files().delete(fileId=entry['file_id']).execute()
                     logger.info(f"✅ Deleted: {entry['name']}")
+                    logger.debug(f"Freed up {entry['size']}")
                     log_deleted_file(folder_id, entry['name'], entry['link'], entry['size'])
                     deleted_files.add(entry['file_id'])
                     deleted_count += 1
@@ -1187,15 +1242,20 @@ def interactive_cleanup(service, report_file, folder_id):
                     if e.resp.status == 404:
                         # File already deleted or doesn't exist
                         logger.warning(f"⚠️  File not found (404) - treating as deleted: {entry['name']}")
+                        logger.debug("File may have been deleted by another process or user")
                         log_deleted_file(folder_id, entry['name'], entry['link'], entry['size'])
                         deleted_files.add(entry['file_id'])
                         deleted_count += 1
                         break
                     else:
-                        logger.error(f"❌ Failed to delete: {e}")
+                        logger.error(f"❌ Failed to delete: HTTP {e.resp.status}")
+                        logger.error(f"Error details: {e}")
+                        logger.warning("Skipping this file - check permissions or try again later")
                         break
                 except Exception as e:
-                    logger.error(f"❌ Failed to delete: {e}")
+                    logger.error(f"❌ Failed to delete: {type(e).__name__}")
+                    logger.error(f"Error details: {e}")
+                    logger.warning("Unexpected error - skipping this file")
                     break
 
             elif choice == '2':
@@ -1421,11 +1481,14 @@ Examples:
         analyzer.analyze_empty_folders()
 
         # Generate report
+        logger.debug("Generating analysis report")
         report = analyzer.generate_report()
 
         # Save report
         folder_suffix = f"_{folder_id}" if folder_id else "_full_drive"
-        report_filename = f"drive_cleanup_report{folder_suffix}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.txt"
+        report_filename = os.path.join(REPORTS_DIR, f"drive_cleanup_report{folder_suffix}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.txt")
+
+        logger.debug(f"Writing report to {report_filename}")
         with open(report_filename, 'w', encoding='utf-8') as f:
             f.write(report)
 

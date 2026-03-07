@@ -31,11 +31,10 @@ credentials.json
 token.pickle
 token_write.pickle
 
-# Generated files
-*_deleted_files.txt
-*_skipped_files.txt
-*_session_*.log
-drive_cleanup_report_*.txt
+# Generated directories and files
+state/
+reports/
+logs/
 
 # IDE
 .vscode/
