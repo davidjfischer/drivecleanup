@@ -859,39 +859,109 @@ class FileAnalyzer:
 
         logger.info(f"Content analysis complete! Analyzed {self.stats['content_analyzed']} files")
 
+    def _folder_contains_only_empty_folders(self, folder_id, checked_folders=None):
+        """Recursively check if a folder contains only empty folders (no files)."""
+        if checked_folders is None:
+            checked_folders = set()
+
+        # Avoid infinite loops
+        if folder_id in checked_folders:
+            return True
+        checked_folders.add(folder_id)
+
+        try:
+            logger.debug(f"Checking if folder {folder_id} contains only empty folders")
+
+            # Get all children
+            results = self.service.files().list(
+                pageSize=1000,
+                q=f"'{folder_id}' in parents and trashed=false",
+                fields="files(id, mimeType)"
+            ).execute()
+
+            children = results.get('files', [])
+
+            if not children:
+                # Completely empty
+                logger.debug(f"Folder {folder_id} is completely empty")
+                return True
+
+            # Check if there are any files (non-folders)
+            for child in children:
+                if child['mimeType'] != 'application/vnd.google-apps.folder':
+                    # Found a file - not empty
+                    logger.debug(f"Folder {folder_id} contains files")
+                    return False
+
+            # Only folders - check recursively
+            logger.debug(f"Folder {folder_id} contains only subfolders, checking recursively")
+            for child in children:
+                if not self._folder_contains_only_empty_folders(child['id'], checked_folders):
+                    return False
+
+            # All subfolders are empty
+            logger.debug(f"Folder {folder_id} contains only empty subfolders")
+            return True
+
+        except Exception as e:
+            logger.debug(f"Error checking folder {folder_id}: {e}")
+            return False
+
     def analyze_empty_folders(self):
-        """Find empty folders."""
-        logger.info("Checking for empty folders...")
+        """Find empty folders and folders containing only empty subfolders."""
+        logger.info("Checking for empty folders and folders with only empty subfolders...")
 
         empty_folders = []
+        folders_with_only_empty_subfolders = []
 
         for folder in self.all_folders:
             folder_id = folder['id']
             folder_name = folder['name']
 
-            # Check if folder has any children
+            logger.debug(f"Analyzing folder: {folder_name}")
+
+            # Check if folder contains only empty folders recursively
             try:
-                results = self.service.files().list(
-                    pageSize=1,
-                    q=f"'{folder_id}' in parents and trashed=false",
-                    fields="files(id)"
-                ).execute()
+                if self._folder_contains_only_empty_folders(folder_id):
+                    # Check if completely empty or has empty subfolders
+                    results = self.service.files().list(
+                        pageSize=1,
+                        q=f"'{folder_id}' in parents and trashed=false",
+                        fields="files(id)"
+                    ).execute()
 
-                files = results.get('files', [])
+                    if not results.get('files', []):
+                        # Completely empty
+                        empty_folders.append({
+                            'id': folder_id,
+                            'name': folder_name,
+                            'link': folder.get('webViewLink', 'N/A'),
+                            'reasons': ['Empty folder (no files)'],
+                            'size': 0
+                        })
+                        logger.debug(f"Marked as empty: {folder_name}")
+                    else:
+                        # Has subfolders, but all empty
+                        folders_with_only_empty_subfolders.append({
+                            'id': folder_id,
+                            'name': folder_name,
+                            'link': folder.get('webViewLink', 'N/A'),
+                            'reasons': ['Folder contains only empty subfolders (no files)'],
+                            'size': 0
+                        })
+                        logger.debug(f"Marked as containing only empty subfolders: {folder_name}")
 
-                if not files:
-                    empty_folders.append({
-                        'id': folder_id,
-                        'name': folder_name,
-                        'link': folder.get('webViewLink', 'N/A'),
-                        'reasons': ['Empty folder (no files)']
-                    })
             except Exception as e:
                 logger.debug(f"Error checking folder {folder_name}: {e}")
 
+        # Add to delete candidates
         if empty_folders:
-            self.delete_candidates['MEDIUM'].extend(empty_folders)
-            logger.info(f"Found {len(empty_folders)} empty folders")
+            self.delete_candidates['HIGH'].extend(empty_folders)
+            logger.info(f"Found {len(empty_folders)} completely empty folders")
+
+        if folders_with_only_empty_subfolders:
+            self.delete_candidates['HIGH'].extend(folders_with_only_empty_subfolders)
+            logger.info(f"Found {len(folders_with_only_empty_subfolders)} folders containing only empty subfolders")
 
     def generate_report(self):
         """Generate a detailed report of deletion candidates."""
@@ -1201,27 +1271,72 @@ def interactive_cleanup(service, report_file, folder_id):
             already_processed_count += 1
             continue
 
-        logger.info("=" * 80)
-        logger.info(f"File {i + 1}/{len(entries)} - {entry['confidence']} CONFIDENCE")
-        logger.info("=" * 80)
-        logger.info(f"Name: {entry['name']}")
-        logger.info(f"Size: {entry['size']}")
-        logger.info(f"Link: {entry['link']}")
-        logger.info(f"Reasons:")
+        # Print beautiful dialog box (NOT logged, only to stdout)
+        print("\n")
+        print("╔" + "═" * 78 + "╗")
+        print(f"║ File {i + 1}/{len(entries)} - {entry['confidence']} CONFIDENCE" + " " * (78 - len(f" File {i + 1}/{len(entries)} - {entry['confidence']} CONFIDENCE")) + "║")
+        print("╠" + "═" * 78 + "╣")
+        print(f"║ Name: {entry['name'][:70]}" + " " * (78 - len(f" Name: {entry['name'][:70]}")) + "║")
+        print(f"║ Size: {entry['size']}" + " " * (78 - len(f" Size: {entry['size']}")) + "║")
+        print("╠" + "─" * 78 + "╣")
+
+        # Print reasons
+        print("║ Reasons:" + " " * 69 + "║")
         for reason in entry['reasons']:
-            logger.info(f"  - {reason}")
+            reason_text = f"   • {reason}"
+            if len(reason_text) > 76:
+                # Wrap long reasons
+                words = reason_text.split()
+                current_line = "║   • "
+                for word in words[1:]:  # Skip the bullet point
+                    if len(current_line + word) + 2 < 77:
+                        current_line += word + " "
+                    else:
+                        print(current_line.rstrip() + " " * (78 - len(current_line.rstrip())) + "║")
+                        current_line = "║     " + word + " "
+                if len(current_line) > 6:
+                    print(current_line.rstrip() + " " * (78 - len(current_line.rstrip())) + "║")
+            else:
+                print("║ " + reason_text + " " * (76 - len(reason_text)) + "║")
 
+        # Print summary if available
         if entry['summary']:
-            logger.info(f"Content Summary:")
-            logger.info(f"  {entry['summary']}")
+            print("╠" + "─" * 78 + "╣")
+            print("║ Content Summary:" + " " * 61 + "║")
+            summary_lines = entry['summary'].split('\n')
+            for line in summary_lines:
+                if len(line) > 74:
+                    # Wrap long lines
+                    words = line.split()
+                    current_line = "║   "
+                    for word in words:
+                        if len(current_line + word) + 2 < 77:
+                            current_line += word + " "
+                        else:
+                            print(current_line.rstrip() + " " * (78 - len(current_line.rstrip())) + "║")
+                            current_line = "║   " + word + " "
+                    if len(current_line) > 4:
+                        print(current_line.rstrip() + " " * (78 - len(current_line.rstrip())) + "║")
+                else:
+                    print("║   " + line + " " * (75 - len(line)) + "║")
 
-        logger.info("")
+        # Print options
+        print("╠" + "═" * 78 + "╣")
+        print("║ Choose action:                                                             ║")
+        print("║   (1) Delete  │  (2) Open in Browser  │  (3) Skip  │  (q) Quit            ║")
+        print("╚" + "═" * 78 + "╝")
+        print("Your choice: ", end='', flush=True)
 
-        while True:
-            logger.info("Choose action: (1) Delete | (2) Open in Browser | (3) Skip | (q) Quit: ")
-            choice = get_single_key().lower()
-            logger.info(choice)  # Echo the choice
+        choice = get_single_key().lower()
+        print(choice)  # Echo the choice
 
+        # NOW log the file information and choice
+        logger.info(f"Processing file {i + 1}/{len(entries)}: {entry['name']} ({entry['size']}) - {entry['confidence']} confidence")
+        logger.info(f"User choice: {choice}")
+
+        # Process the choice
+        action_complete = False
+        while not action_complete:
             if choice == '1':
                 # Delete file
                 if not entry['file_id']:
@@ -1233,51 +1348,65 @@ def interactive_cleanup(service, report_file, folder_id):
                 try:
                     service.files().delete(fileId=entry['file_id']).execute()
                     logger.info(f"✅ Deleted: {entry['name']}")
+                    print(f"✅ Deleted successfully!")
                     logger.debug(f"Freed up {entry['size']}")
                     log_deleted_file(folder_id, entry['name'], entry['link'], entry['size'])
                     deleted_files.add(entry['file_id'])
                     deleted_count += 1
-                    break
+                    action_complete = True
                 except HttpError as e:
                     if e.resp.status == 404:
                         # File already deleted or doesn't exist
                         logger.warning(f"⚠️  File not found (404) - treating as deleted: {entry['name']}")
+                        print(f"⚠️  File not found (404) - treating as deleted")
                         logger.debug("File may have been deleted by another process or user")
                         log_deleted_file(folder_id, entry['name'], entry['link'], entry['size'])
                         deleted_files.add(entry['file_id'])
                         deleted_count += 1
-                        break
+                        action_complete = True
                     else:
                         logger.error(f"❌ Failed to delete: HTTP {e.resp.status}")
                         logger.error(f"Error details: {e}")
+                        print(f"❌ Failed to delete: {e}")
                         logger.warning("Skipping this file - check permissions or try again later")
-                        break
+                        action_complete = True
                 except Exception as e:
                     logger.error(f"❌ Failed to delete: {type(e).__name__}")
                     logger.error(f"Error details: {e}")
+                    print(f"❌ Failed to delete: {e}")
                     logger.warning("Unexpected error - skipping this file")
-                    break
+                    action_complete = True
 
             elif choice == '2':
                 # Open in browser
                 logger.info(f"🌐 Opening in browser: {entry['link']}")
+                print(f"\n🌐 Opening in browser...")
                 try:
                     webbrowser.open(entry['link'])
-                    logger.info("File opened in browser. Choose action:")
-                    logger.info("")
+                    print("File opened in browser. Please review and choose an action.")
+                    print("\nYour choice: ", end='', flush=True)
+                    choice = get_single_key().lower()
+                    print(choice)
+                    logger.info(f"After browser review, user choice: {choice}")
+                    # Continue loop with new choice
                 except Exception as e:
                     logger.error(f"Failed to open browser: {e}")
-                    break
+                    print(f"❌ Failed to open browser: {e}")
+                    action_complete = True
 
             elif choice == '3':
                 # Skip
                 logger.info(f"⏭️  Skipped: {entry['name']}")
+                print(f"⏭️  Skipped")
                 log_skipped_file(folder_id, entry['name'], entry['link'], entry['size'])
                 skipped_files.add(entry['file_id'])
                 skipped_count += 1
-                break
+                action_complete = True
 
             elif choice == 'q':
+                print("\n" + "═" * 80)
+                print("CLEANUP SESSION SUMMARY")
+                print("═" * 80)
                 logger.info("")
                 logger.info("=" * 80)
                 logger.info("CLEANUP SESSION SUMMARY")
@@ -1286,27 +1415,50 @@ def interactive_cleanup(service, report_file, folder_id):
                 logger.info(f"Files skipped: {skipped_count}")
                 logger.info(f"Files already processed: {already_processed_count}")
                 logger.info(f"Files remaining: {len(entries) - i - 1}")
+                print(f"Files deleted: {deleted_count}")
+                print(f"Files skipped: {skipped_count}")
+                print(f"Files already processed: {already_processed_count}")
+                print(f"Files remaining: {len(entries) - i - 1}")
                 logger.info("")
                 logger.info(f"Logs saved:")
                 logger.info(f"  Deleted: {deleted_log}")
                 logger.info(f"  Skipped: {skipped_log}")
+                print(f"\nLogs saved:")
+                print(f"  Deleted: {deleted_log}")
+                print(f"  Skipped: {skipped_log}")
+                print("═" * 80)
                 return
 
             else:
-                logger.warning("Invalid choice. Please press 1, 2, 3, or q")
+                logger.warning(f"Invalid choice: {choice}. Please press 1, 2, 3, or q")
+                print(f"❌ Invalid choice '{choice}'. Please press 1, 2, 3, or q")
+                print("Your choice: ", end='', flush=True)
+                choice = get_single_key().lower()
+                print(choice)
+                logger.info(f"Retrying with choice: {choice}")
 
-        logger.info("")
+        print("")  # Add spacing after action
 
+    print("\n" + "═" * 80)
+    print("CLEANUP SESSION COMPLETE")
+    print("═" * 80)
     logger.info("=" * 80)
     logger.info("CLEANUP SESSION COMPLETE")
     logger.info("=" * 80)
     logger.info(f"Files deleted: {deleted_count}")
     logger.info(f"Files skipped: {skipped_count}")
     logger.info(f"Files already processed: {already_processed_count}")
+    print(f"Files deleted: {deleted_count}")
+    print(f"Files skipped: {skipped_count}")
+    print(f"Files already processed: {already_processed_count}")
     logger.info("")
     logger.info(f"Logs saved:")
     logger.info(f"  Deleted: {deleted_log}")
     logger.info(f"  Skipped: {skipped_log}")
+    print(f"\nLogs saved:")
+    print(f"  Deleted: {deleted_log}")
+    print(f"  Skipped: {skipped_log}")
+    print("═" * 80 + "\n")
 
 # ============================================================================
 # MAIN
