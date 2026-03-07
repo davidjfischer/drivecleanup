@@ -86,12 +86,19 @@ During cleanup, press:
 
 ## Generated Files
 
-For each folder analyzed, the tool creates:
+The tool organizes generated files into subdirectories:
 
-- `{FOLDER_ID}_deleted_files.txt` - Log of deleted files
-- `{FOLDER_ID}_skipped_files.txt` - Log of skipped files
-- `{FOLDER_ID}_session_{TIMESTAMP}.log` - Full session log
-- `drive_cleanup_report_{FOLDER_ID}_{TIMESTAMP}.txt` - Analysis report
+### `state/` - File tracking
+- `{FOLDER_ID}_deleted_files.txt` - Log of all deleted files
+- `{FOLDER_ID}_skipped_files.txt` - Log of all skipped files
+
+### `reports/` - Analysis reports
+- `drive_cleanup_report_{FOLDER_ID}_{TIMESTAMP}.txt` - Detailed analysis report with deletion candidates
+
+### `logs/` - Session logs
+- `{FOLDER_ID}_session_{TIMESTAMP}.log` - Complete session log with DEBUG-level information
+
+All directories are created automatically when the script runs.
 
 ## File Protection
 
@@ -119,6 +126,23 @@ Customize with:
 ```bash
 --max-files 5000
 ```
+
+## Logging
+
+The tool provides comprehensive logging:
+
+- **Console output**: INFO level messages (colored, user-friendly)
+- **Log files**: DEBUG level messages in `logs/` directory
+  - Includes detailed API calls, authentication steps, and error traces
+  - Useful for troubleshooting and audit trails
+  - One log file per session with timestamp
+
+Log files include:
+- Full authentication process
+- Every file scanned with metadata
+- All deletion operations with results
+- Detailed error messages with stack traces
+- Performance metrics
 
 ## Development
 
