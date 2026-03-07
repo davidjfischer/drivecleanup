@@ -1456,6 +1456,12 @@ def interactive_cleanup(service, report_file, folder_id):
                 print(f"\nLogs saved:")
                 print(f"  Deleted: {deleted_log}")
                 print(f"  Skipped: {skipped_log}")
+
+                # Colored message advising to rerun for empty folder detection
+                print("\n\033[96m💡 TIP: Rerun the script to detect newly empty folders!\033[0m")
+                print("\033[96m   Deleting files may have created empty folders that can now be removed.\033[0m")
+                logger.info("TIP: User advised to rerun script to detect newly empty folders")
+
                 print("═" * 80)
                 return
 
@@ -1488,6 +1494,12 @@ def interactive_cleanup(service, report_file, folder_id):
     print(f"\nLogs saved:")
     print(f"  Deleted: {deleted_log}")
     print(f"  Skipped: {skipped_log}")
+
+    # Colored message advising to rerun for empty folder detection
+    print("\n\033[96m💡 TIP: Rerun the script to detect newly empty folders!\033[0m")
+    print("\033[96m   Deleting files may have created empty folders that can now be removed.\033[0m")
+    logger.info("TIP: User advised to rerun script to detect newly empty folders")
+
     print("═" * 80 + "\n")
 
 # ============================================================================
