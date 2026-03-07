@@ -1,0 +1,143 @@
+# DriveCleanup
+
+Intelligent Google Drive cleanup tool with Claude AI analysis via AWS Bedrock.
+
+## Features
+
+- 🤖 **Claude AI Analysis**: Intelligent content summarization using AWS Bedrock
+- 🔍 **Smart Detection**: Identifies obsolete files while protecting photos, videos, and music
+- 📄 **Content Extraction**: Reads PDFs, Word docs, Excel files, and Google Docs
+- ⚡ **Single-Key Controls**: Fast interactive cleanup with no Enter key needed
+- 📊 **Comprehensive Logging**: Full session logs and file tracking
+- 🔄 **Resume Support**: Automatically skips already processed files
+- 🛡️ **Safe Deletion**: Handles 404 errors gracefully
+
+## Installation
+
+### Prerequisites
+
+- Python 3.11+
+- [uv](https://docs.astral.sh/uv/) package manager
+- AWS account with Bedrock access
+- Google Cloud project with Drive API enabled
+
+### Setup
+
+1. Clone the repository:
+```bash
+git clone https://github.com/davidjfischer/drivecleanup.git
+cd drivecleanup
+```
+
+2. Install dependencies:
+```bash
+uv sync
+```
+
+3. Add your Google OAuth credentials:
+   - Create a project in [Google Cloud Console](https://console.cloud.google.com/)
+   - Enable Google Drive API
+   - Create OAuth 2.0 credentials
+   - Download and save as `credentials.json` in the project directory
+
+4. Configure AWS Bedrock:
+   - Ensure you have AWS credentials configured (`~/.aws/credentials`)
+   - Enable Claude model access in your AWS Bedrock console
+
+## Usage
+
+### Full Workflow (Analyze + Interactive Cleanup)
+
+```bash
+uv run python drivecleanup.py "https://drive.google.com/drive/folders/YOUR_FOLDER_ID"
+```
+
+### Analysis Only
+
+```bash
+uv run python drivecleanup.py FOLDER_ID --analyze
+```
+
+### Cleanup Only (uses existing report)
+
+```bash
+uv run python drivecleanup.py FOLDER_ID --clean
+```
+
+### Without Claude AI (faster, simpler)
+
+```bash
+uv run python drivecleanup.py FOLDER_ID --no-claude
+```
+
+### Custom AWS Profile
+
+```bash
+uv run python drivecleanup.py FOLDER_ID --aws-profile prod --aws-region eu-central-1
+```
+
+## Interactive Controls
+
+During cleanup, press:
+- `1` - Delete file immediately (no confirmation)
+- `2` - Open in browser (stays in dialog)
+- `3` - Skip file
+- `q` - Quit session
+
+## Generated Files
+
+For each folder analyzed, the tool creates:
+
+- `{FOLDER_ID}_deleted_files.txt` - Log of deleted files
+- `{FOLDER_ID}_skipped_files.txt` - Log of skipped files
+- `{FOLDER_ID}_session_{TIMESTAMP}.log` - Full session log
+- `drive_cleanup_report_{FOLDER_ID}_{TIMESTAMP}.txt` - Analysis report
+
+## File Protection
+
+The following file types are **never** suggested for deletion:
+- Photos (JPG, PNG, etc.)
+- Videos (MP4, MOV, etc.)
+- Audio files (MP3, M4A, etc.)
+
+## Configuration
+
+### AWS Bedrock Settings
+
+Default: `dev` profile in `us-east-1` region
+
+Customize with:
+```bash
+--aws-profile YOUR_PROFILE --aws-region YOUR_REGION
+```
+
+### Analysis Depth
+
+Default: Up to 10,000 files
+
+Customize with:
+```bash
+--max-files 5000
+```
+
+## Development
+
+### Running from source
+
+```bash
+uv run python drivecleanup.py --help
+```
+
+### Running tests
+
+```bash
+uv run pytest
+```
+
+## License
+
+MIT
+
+## Author
+
+Created with assistance from Claude Opus 4.6
