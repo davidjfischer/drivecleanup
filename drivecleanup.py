@@ -1219,6 +1219,18 @@ def parse_cleanup_report(report_file):
 
     return entries
 
+def format_box_line(text, width=78):
+    """Format a line for the dialog box with exact width."""
+    # Ensure text doesn't exceed width
+    if len(text) > width:
+        text = text[:width]
+    # Pad with spaces to exact width
+    return "║ " + text + " " * (width - len(text) - 2) + " ║"
+
+def format_box_separator(char="─", width=78):
+    """Format a separator line for the dialog box."""
+    return "╠" + char * width + "╣"
+
 def interactive_cleanup(service, report_file, folder_id):
     """Interactive cleanup session based on report."""
     import webbrowser
@@ -1271,67 +1283,85 @@ def interactive_cleanup(service, report_file, folder_id):
             already_processed_count += 1
             continue
 
+        # Log file description BEFORE showing dialog
+        logger.info("=" * 80)
+        logger.info(f"Presenting file {i + 1}/{len(entries)} to user: {entry['name']}")
+        logger.info(f"  Size: {entry['size']}")
+        logger.info(f"  Confidence: {entry['confidence']}")
+        logger.info(f"  Link: {entry['link']}")
+        logger.info(f"  Reasons:")
+        for reason in entry['reasons']:
+            logger.info(f"    - {reason}")
+        if entry['summary']:
+            logger.info(f"  Content Summary: {entry['summary'][:200]}")
+        logger.info("=" * 80)
+
         # Print beautiful dialog box (NOT logged, only to stdout)
         print("\n")
         print("╔" + "═" * 78 + "╗")
-        print(f"║ File {i + 1}/{len(entries)} - {entry['confidence']} CONFIDENCE" + " " * (78 - len(f" File {i + 1}/{len(entries)} - {entry['confidence']} CONFIDENCE")) + "║")
-        print("╠" + "═" * 78 + "╣")
-        print(f"║ Name: {entry['name'][:70]}" + " " * (78 - len(f" Name: {entry['name'][:70]}")) + "║")
-        print(f"║ Size: {entry['size']}" + " " * (78 - len(f" Size: {entry['size']}")) + "║")
-        print("╠" + "─" * 78 + "╣")
+        print(format_box_line(f"File {i + 1}/{len(entries)} - {entry['confidence']} CONFIDENCE"))
+        print(format_box_separator("═"))
+        print(format_box_line(f"Name: {entry['name'][:68]}"))
+        print(format_box_line(f"Size: {entry['size']}"))
+        print(format_box_separator("─"))
 
         # Print reasons
-        print("║ Reasons:" + " " * 69 + "║")
+        print(format_box_line("Reasons:"))
         for reason in entry['reasons']:
-            reason_text = f"   • {reason}"
-            if len(reason_text) > 76:
-                # Wrap long reasons
-                words = reason_text.split()
-                current_line = "║   • "
-                for word in words[1:]:  # Skip the bullet point
-                    if len(current_line + word) + 2 < 77:
+            # Wrap long reasons
+            reason_lines = []
+            reason_text = f"  • {reason}"
+            if len(reason_text) <= 74:
+                reason_lines.append(reason_text)
+            else:
+                # Word wrap
+                words = reason.split()
+                current_line = "  • "
+                for word in words:
+                    if len(current_line + word + " ") <= 74:
                         current_line += word + " "
                     else:
-                        print(current_line.rstrip() + " " * (78 - len(current_line.rstrip())) + "║")
-                        current_line = "║     " + word + " "
-                if len(current_line) > 6:
-                    print(current_line.rstrip() + " " * (78 - len(current_line.rstrip())) + "║")
-            else:
-                print("║ " + reason_text + " " * (76 - len(reason_text)) + "║")
+                        reason_lines.append(current_line.rstrip())
+                        current_line = "    " + word + " "
+                if current_line.strip():
+                    reason_lines.append(current_line.rstrip())
+
+            for line in reason_lines:
+                print(format_box_line(line))
 
         # Print summary if available
         if entry['summary']:
-            print("╠" + "─" * 78 + "╣")
-            print("║ Content Summary:" + " " * 61 + "║")
+            print(format_box_separator("─"))
+            print(format_box_line("Content Summary:"))
             summary_lines = entry['summary'].split('\n')
             for line in summary_lines:
-                if len(line) > 74:
-                    # Wrap long lines
+                # Wrap long lines
+                if len(line) <= 72:
+                    print(format_box_line(f"  {line}"))
+                else:
+                    # Word wrap
                     words = line.split()
-                    current_line = "║   "
+                    current_line = "  "
                     for word in words:
-                        if len(current_line + word) + 2 < 77:
+                        if len(current_line + word + " ") <= 74:
                             current_line += word + " "
                         else:
-                            print(current_line.rstrip() + " " * (78 - len(current_line.rstrip())) + "║")
-                            current_line = "║   " + word + " "
-                    if len(current_line) > 4:
-                        print(current_line.rstrip() + " " * (78 - len(current_line.rstrip())) + "║")
-                else:
-                    print("║   " + line + " " * (75 - len(line)) + "║")
+                            print(format_box_line(current_line.rstrip()))
+                            current_line = "  " + word + " "
+                    if current_line.strip():
+                        print(format_box_line(current_line.rstrip()))
 
         # Print options
-        print("╠" + "═" * 78 + "╣")
-        print("║ Choose action:                                                             ║")
-        print("║   (1) Delete  │  (2) Open in Browser  │  (3) Skip  │  (q) Quit            ║")
+        print(format_box_separator("═"))
+        print(format_box_line("Choose action:"))
+        print(format_box_line("  (1) Delete  │  (2) Open in Browser  │  (3) Skip  │  (q) Quit"))
         print("╚" + "═" * 78 + "╝")
         print("Your choice: ", end='', flush=True)
 
         choice = get_single_key().lower()
         print(choice)  # Echo the choice
 
-        # NOW log the file information and choice
-        logger.info(f"Processing file {i + 1}/{len(entries)}: {entry['name']} ({entry['size']}) - {entry['confidence']} confidence")
+        # Log user choice
         logger.info(f"User choice: {choice}")
 
         # Process the choice
