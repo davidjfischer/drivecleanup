@@ -495,7 +495,8 @@ class FileAnalyzer:
                 self.use_claude = False
 
         self.all_files = []
-        self.all_folders = []
+        self.all_folders = []  # All folders (including from duplicate scan)
+        self.scanned_folders = []  # Only folders from current scan (for empty folder detection)
         self.delete_candidates = {
             'HIGH': [],  # Very confident to delete
             'MEDIUM': [],  # Probably safe to delete
@@ -697,6 +698,7 @@ class FileAnalyzer:
                         # Separate files and folders
                         if item['mimeType'] == 'application/vnd.google-apps.folder':
                             self.all_folders.append(item)
+                            self.scanned_folders.append(item)  # Track for empty folder detection
                             self.stats['total_folders'] += 1
                             # Track folder names for path building
                             self.folder_id_to_name[item['id']] = item['name']
@@ -764,6 +766,7 @@ class FileAnalyzer:
                     # Separate files and folders
                     if item['mimeType'] == 'application/vnd.google-apps.folder':
                         self.all_folders.append(item)
+                        self.scanned_folders.append(item)  # Track for empty folder detection
                         self.stats['total_folders'] += 1
                         # Track folder names for path building
                         self.folder_id_to_name[item['id']] = item['name']
@@ -1234,12 +1237,16 @@ class FileAnalyzer:
 
     def analyze_empty_folders(self):
         """Find empty folders and folders containing only empty subfolders."""
+        if not self.scanned_folders:
+            logger.info("No folders found in scanned area, skipping empty folder analysis")
+            return
+
         logger.info("Checking for empty folders and folders with only empty subfolders...")
 
         empty_folders = []
         folders_with_only_empty_subfolders = []
 
-        for folder in self.all_folders:
+        for folder in self.scanned_folders:
             folder_id = folder['id']
             folder_name = folder['name']
 
