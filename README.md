@@ -47,23 +47,34 @@ uv sync
 
 ## Usage
 
-### Full Workflow (Analyze + Interactive Cleanup)
+### Full Workflow (Refresh + Analyze + Interactive Cleanup)
 
 ```bash
 uv run python drivecleanup.py "https://drive.google.com/drive/folders/YOUR_FOLDER_ID"
 ```
 
-### Analysis Only
+### Workflow Steps (Flexible Combinations)
+
+The tool supports three independent workflow steps that can be combined:
 
 ```bash
+# Refresh checksum cache only
+uv run python drivecleanup.py FOLDER_ID --refresh_checksums
+
+# Analysis only
 uv run python drivecleanup.py FOLDER_ID --analyze
-```
 
-### Cleanup Only (uses existing report)
-
-```bash
+# Cleanup only (uses existing report)
 uv run python drivecleanup.py FOLDER_ID --clean
+
+# Refresh + Analyze (skip cleanup)
+uv run python drivecleanup.py FOLDER_ID --refresh_checksums --analyze
+
+# Analyze + Cleanup (skip refresh)
+uv run python drivecleanup.py FOLDER_ID --analyze --clean
 ```
+
+Steps always execute in order: **Refresh → Analyze → Clean**
 
 ### Without Claude AI (faster, simpler)
 
@@ -80,9 +91,10 @@ uv run python drivecleanup.py FOLDER_ID --aws-profile prod --aws-region eu-centr
 ## Interactive Controls
 
 During cleanup, press:
-- `1` - Delete file immediately (no confirmation)
+- `1` - Move file to trash (no confirmation)
 - `2` - Open in browser (stays in dialog)
-- `3` - Skip file
+- `3` - Skip file (marked as skipped, won't be shown again)
+- `4` - Next (move to next file without marking as skipped)
 - `q` - Quit session
 
 ## Generated Files
@@ -103,10 +115,12 @@ All directories are created automatically when the script runs.
 
 ## File Protection
 
-The following file types are **never** suggested for deletion:
+The following file types are **never** suggested for deletion (even if duplicates are found):
 - Photos (JPG, PNG, etc.)
 - Videos (MP4, MOV, etc.)
 - Audio files (MP3, M4A, etc.)
+
+**Important:** Files are moved to Google Drive trash, not permanently deleted. You can recover them from trash if needed.
 
 **Shared files/folders** are automatically excluded:
 - Files and folders shared with you (but not owned by you) are excluded from all scans

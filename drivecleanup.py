@@ -1000,25 +1000,39 @@ class FileAnalyzer:
 
                     # Mark ALL files in scanned folder as duplicates
                     for duplicate_file in duplicates_in_folder:
-                        duplicates_found += 1
-                        duplicate_path = self.get_file_path(duplicate_file)
-                        candidate = {
-                            'id': duplicate_file['id'],
-                            'name': duplicate_file['name'],
-                            'path': duplicate_path,
-                            'size': int(duplicate_file.get('size', 0)) if 'size' in duplicate_file else 0,
-                            'modified': duplicate_file.get('modifiedTime'),
-                            'viewed': duplicate_file.get('viewedByMeTime'),
-                            'reasons': [f"Duplicate file - original at: {original_path}"],
-                            'link': duplicate_file.get('webViewLink', 'N/A'),
-                            'age_days': 0,
-                            'mime_type': duplicate_file.get('mimeType', 'Unknown'),
-                            'summary': None
-                        }
+                        mime_type = duplicate_file.get('mimeType', '')
 
-                        self.delete_candidates['HIGH'].append(candidate)
-                        if 'size' in duplicate_file:
-                            self.stats['potential_savings'] += int(duplicate_file['size'])
+                        # Check if this is a protected media file
+                        media_mime_types = [
+                            'image/', 'video/', 'audio/',
+                            'application/vnd.google-apps.photo',
+                            'application/vnd.google-apps.video'
+                        ]
+                        is_media = any(mime_type.startswith(prefix) for prefix in media_mime_types)
+
+                        # Only mark duplicate if it's NOT a media file (photos/videos are protected)
+                        if not is_media:
+                            duplicates_found += 1
+                            duplicate_path = self.get_file_path(duplicate_file)
+                            candidate = {
+                                'id': duplicate_file['id'],
+                                'name': duplicate_file['name'],
+                                'path': duplicate_path,
+                                'size': int(duplicate_file.get('size', 0)) if 'size' in duplicate_file else 0,
+                                'modified': duplicate_file.get('modifiedTime'),
+                                'viewed': duplicate_file.get('viewedByMeTime'),
+                                'reasons': [f"Duplicate file - original at: {original_path}"],
+                                'link': duplicate_file.get('webViewLink', 'N/A'),
+                                'age_days': 0,
+                                'mime_type': mime_type,
+                                'summary': None
+                            }
+
+                            self.delete_candidates['HIGH'].append(candidate)
+                            if 'size' in duplicate_file:
+                                self.stats['potential_savings'] += int(duplicate_file['size'])
+                        else:
+                            logger.debug(f"Skipping duplicate media file (protected): {duplicate_file.get('name', 'Unknown')}")
                 else:
                     # All duplicates are in scanned folder - keep oldest, mark rest as duplicates
                     sorted_in_folder = sorted(duplicates_in_folder, key=lambda f: f.get('modifiedTime', ''), reverse=False)
@@ -1027,25 +1041,39 @@ class FileAnalyzer:
 
                     # Mark all except the oldest as duplicates
                     for duplicate_file in sorted_in_folder[1:]:
-                        duplicates_found += 1
-                        duplicate_path = self.get_file_path(duplicate_file)
-                        candidate = {
-                            'id': duplicate_file['id'],
-                            'name': duplicate_file['name'],
-                            'path': duplicate_path,
-                            'size': int(duplicate_file.get('size', 0)) if 'size' in duplicate_file else 0,
-                            'modified': duplicate_file.get('modifiedTime'),
-                            'viewed': duplicate_file.get('viewedByMeTime'),
-                            'reasons': [f"Duplicate file (in same folder) - keep oldest at: {original_path}"],
-                            'link': duplicate_file.get('webViewLink', 'N/A'),
-                            'age_days': 0,
-                            'mime_type': duplicate_file.get('mimeType', 'Unknown'),
-                            'summary': None
-                        }
+                        mime_type = duplicate_file.get('mimeType', '')
 
-                        self.delete_candidates['HIGH'].append(candidate)
-                        if 'size' in duplicate_file:
-                            self.stats['potential_savings'] += int(duplicate_file['size'])
+                        # Check if this is a protected media file
+                        media_mime_types = [
+                            'image/', 'video/', 'audio/',
+                            'application/vnd.google-apps.photo',
+                            'application/vnd.google-apps.video'
+                        ]
+                        is_media = any(mime_type.startswith(prefix) for prefix in media_mime_types)
+
+                        # Only mark duplicate if it's NOT a media file (photos/videos are protected)
+                        if not is_media:
+                            duplicates_found += 1
+                            duplicate_path = self.get_file_path(duplicate_file)
+                            candidate = {
+                                'id': duplicate_file['id'],
+                                'name': duplicate_file['name'],
+                                'path': duplicate_path,
+                                'size': int(duplicate_file.get('size', 0)) if 'size' in duplicate_file else 0,
+                                'modified': duplicate_file.get('modifiedTime'),
+                                'viewed': duplicate_file.get('viewedByMeTime'),
+                                'reasons': [f"Duplicate file (in same folder) - keep oldest at: {original_path}"],
+                                'link': duplicate_file.get('webViewLink', 'N/A'),
+                                'age_days': 0,
+                                'mime_type': mime_type,
+                                'summary': None
+                            }
+
+                            self.delete_candidates['HIGH'].append(candidate)
+                            if 'size' in duplicate_file:
+                                self.stats['potential_savings'] += int(duplicate_file['size'])
+                        else:
+                            logger.debug(f"Skipping duplicate media file (protected): {duplicate_file.get('name', 'Unknown')}")
 
         self.stats['duplicates_found'] = duplicates_found
         if duplicates_found > 0:
@@ -1759,7 +1787,7 @@ def interactive_cleanup(service, report_file, folder_id):
         # Print options
         print(format_box_separator("═", color_code=RED))
         print(format_box_line("Choose action:", color_code=RED))
-        print(format_box_line("  (1) Delete  │  (2) Open in Browser  │  (3) Skip  │  (q) Quit", color_code=RED))
+        print(format_box_line("  (1) Delete  │  (2) Browser  │  (3) Skip  │  (4) Next  │  (q) Quit", color_code=RED))
         print(f"{RED}╚" + "═" * 78 + "╝" + RESET)
         print("Your choice: ", end='', flush=True)
 
@@ -1842,6 +1870,12 @@ def interactive_cleanup(service, report_file, folder_id):
                 skipped_count += 1
                 action_complete = True
 
+            elif choice == '4':
+                # Next - just move to next file without logging
+                logger.info(f"➡️  Next: {entry['name']}")
+                print(f"➡️  Moving to next file")
+                action_complete = True
+
             elif choice == 'q':
                 print("\n" + "═" * 80)
                 print("CLEANUP SESSION SUMMARY")
@@ -1878,8 +1912,8 @@ def interactive_cleanup(service, report_file, folder_id):
                 return
 
             else:
-                logger.warning(f"Invalid choice: {choice}. Please press 1, 2, 3, or q")
-                print(f"❌ Invalid choice '{choice}'. Please press 1, 2, 3, or q")
+                logger.warning(f"Invalid choice: {choice}. Please press 1, 2, 3, 4, or q")
+                print(f"❌ Invalid choice '{choice}'. Please press 1, 2, 3, 4, or q")
                 print("Your choice: ", end='', flush=True)
                 choice = get_single_key().lower()
                 print(choice)

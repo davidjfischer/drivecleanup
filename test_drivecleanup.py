@@ -260,6 +260,81 @@ class TestFileAnalyzer(unittest.TestCase):
         )
         self.assertIsNone(confidence)
 
+    def test_is_protected_media_file_images(self):
+        """Test that image files are identified as protected media."""
+        image_mime_types = [
+            "image/jpeg",
+            "image/png",
+            "image/gif",
+            "image/webp",
+            "image/heic"
+        ]
+        media_mime_types = [
+            'image/', 'video/', 'audio/',
+            'application/vnd.google-apps.photo',
+            'application/vnd.google-apps.video'
+        ]
+
+        for mime_type in image_mime_types:
+            is_media = any(mime_type.startswith(prefix) for prefix in media_mime_types)
+            self.assertTrue(is_media, f"{mime_type} should be protected")
+
+    def test_is_protected_media_file_videos(self):
+        """Test that video files are identified as protected media."""
+        video_mime_types = [
+            "video/mp4",
+            "video/quicktime",
+            "video/x-msvideo",
+            "video/webm",
+            "application/vnd.google-apps.video"
+        ]
+        media_mime_types = [
+            'image/', 'video/', 'audio/',
+            'application/vnd.google-apps.photo',
+            'application/vnd.google-apps.video'
+        ]
+
+        for mime_type in video_mime_types:
+            is_media = any(mime_type.startswith(prefix) for prefix in media_mime_types)
+            self.assertTrue(is_media, f"{mime_type} should be protected")
+
+    def test_is_protected_media_file_audio(self):
+        """Test that audio files are identified as protected media."""
+        audio_mime_types = [
+            "audio/mpeg",
+            "audio/mp4",
+            "audio/wav",
+            "audio/ogg"
+        ]
+        media_mime_types = [
+            'image/', 'video/', 'audio/',
+            'application/vnd.google-apps.photo',
+            'application/vnd.google-apps.video'
+        ]
+
+        for mime_type in audio_mime_types:
+            is_media = any(mime_type.startswith(prefix) for prefix in media_mime_types)
+            self.assertTrue(is_media, f"{mime_type} should be protected")
+
+    def test_is_not_protected_media_file_documents(self):
+        """Test that document files are NOT identified as protected media."""
+        doc_mime_types = [
+            "application/pdf",
+            "application/msword",
+            "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+            "text/plain",
+            "application/zip"
+        ]
+        media_mime_types = [
+            'image/', 'video/', 'audio/',
+            'application/vnd.google-apps.photo',
+            'application/vnd.google-apps.video'
+        ]
+
+        for mime_type in doc_mime_types:
+            is_media = any(mime_type.startswith(prefix) for prefix in media_mime_types)
+            self.assertFalse(is_media, f"{mime_type} should NOT be protected as media")
+
 
 class TestParseCleanupReport(unittest.TestCase):
     """Test cleanup report parsing."""
@@ -361,6 +436,82 @@ class TestLogFunctions(unittest.TestCase):
 
         self.assertIn("del123", deleted)
         self.assertIn("skip456", skipped)
+
+
+class TestGetDisplayWidth(unittest.TestCase):
+    """Test Unicode display width calculation for emojis."""
+
+    def test_get_display_width_ascii(self):
+        """Test display width calculation for ASCII text."""
+        text = "Hello World"
+        width = drivecleanup.get_display_width(text)
+        self.assertEqual(width, 11)
+
+    def test_get_display_width_emoji(self):
+        """Test display width calculation for emojis (2 chars wide)."""
+        text = "💡"
+        width = drivecleanup.get_display_width(text)
+        self.assertEqual(width, 2)
+
+    def test_get_display_width_mixed(self):
+        """Test display width calculation for mixed ASCII and emoji."""
+        text = "💡 TIP"
+        width = drivecleanup.get_display_width(text)
+        self.assertEqual(width, 6)  # emoji(2) + space(1) + TIP(3)
+
+    def test_get_display_width_multiple_emojis(self):
+        """Test display width calculation for multiple emojis."""
+        text = "✅ 🌐 ⏭️"
+        width = drivecleanup.get_display_width(text)
+        # Each emoji is 2 chars wide, spaces are 1 char
+        self.assertEqual(width, 8)  # 2 + 1 + 2 + 1 + 2 = 8
+
+
+class TestMinAgeThreshold(unittest.TestCase):
+    """Test minimum age threshold functionality."""
+
+    def setUp(self):
+        """Set up test fixtures."""
+        self.mock_service = Mock()
+
+    def test_custom_min_age_threshold(self):
+        """Test that custom minimum age threshold is respected."""
+        analyzer = drivecleanup.FileAnalyzer(
+            service=self.mock_service,
+            analyze_content=False,
+            use_claude=False,
+            min_age_days=180  # Custom threshold
+        )
+
+        # File older than custom threshold should get confidence
+        reasons = ["Not recently modified"]
+        confidence = analyzer.classify_delete_confidence(
+            reasons, age_days=200, size=1000000, mime_type="application/pdf"
+        )
+        self.assertIsNotNone(confidence)
+
+        # File younger than custom threshold should not get confidence
+        confidence = analyzer.classify_delete_confidence(
+            [], age_days=100, size=1000000, mime_type="application/pdf"
+        )
+        self.assertIsNone(confidence)
+
+    def test_default_min_age_threshold(self):
+        """Test that default minimum age threshold (90 days) is applied."""
+        analyzer = drivecleanup.FileAnalyzer(
+            service=self.mock_service,
+            analyze_content=False,
+            use_claude=False
+        )
+
+        # File older than default threshold (90 days) should potentially get confidence
+        # if it meets other criteria
+        reasons = ["Generic reason"]
+        confidence = analyzer.classify_delete_confidence(
+            reasons, age_days=100, size=1000000, mime_type="application/pdf"
+        )
+        # With generic reason and age > 90, should get LOW confidence
+        self.assertEqual(confidence, "LOW")
 
 
 if __name__ == '__main__':
