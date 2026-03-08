@@ -1007,9 +1007,17 @@ class FileAnalyzer:
         if duplicates_found > 0:
             logger.info(f"Found {duplicates_found} duplicate files in scanned folder")
 
+        # Create set of duplicate file IDs to skip in main analysis
+        duplicate_file_ids = {candidate['id'] for candidate in self.delete_candidates['HIGH']
+                             if any('Duplicate file' in reason for reason in candidate.get('reasons', []))}
+
         for i, file_item in enumerate(self.all_files):
             if (i + 1) % 500 == 0:
                 logger.info(f"Analyzed {i + 1}/{self.stats['total_files']} files...")
+
+            # Skip files already marked as duplicates
+            if file_item['id'] in duplicate_file_ids:
+                continue
 
             name = file_item.get('name', 'Unknown')
             size = int(file_item.get('size', 0)) if 'size' in file_item else 0
