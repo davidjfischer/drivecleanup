@@ -922,9 +922,11 @@ class FileAnalyzer:
                         continue
 
                     duplicates_found += 1
+                    duplicate_path = self.get_file_path(duplicate_file)
                     candidate = {
                         'id': duplicate_file['id'],
                         'name': duplicate_file['name'],
+                        'path': duplicate_path,  # Store full path for duplicates
                         'size': int(duplicate_file.get('size', 0)) if 'size' in duplicate_file else 0,
                         'modified': duplicate_file.get('modifiedTime'),
                         'viewed': duplicate_file.get('viewedByMeTime'),
@@ -1231,6 +1233,9 @@ class FileAnalyzer:
 
                 report_lines.append("")
                 report_lines.append(f"[{i}] {candidate['name']}")
+                # Add path if available (for duplicates)
+                if candidate.get('path'):
+                    report_lines.append(f"    Path: {candidate['path']}")
                 report_lines.append(f"    Size: {size_str}")
                 report_lines.append(f"    Link: {candidate['link']}")
                 report_lines.append(f"    Reasons:")
@@ -1413,13 +1418,14 @@ def parse_cleanup_report(report_file):
         section_content = sections[i + 1]
 
         # Parse individual entries
-        entry_pattern = r'\[(\d+)\] (.+?)\n    Size: (.+?)\n    Link: (.+?)\n    Reasons:\n((?:      - .+\n)+)'
+        # Pattern with optional Path field
+        entry_pattern = r'\[(\d+)\] (.+?)\n(?:    Path: (.+?)\n)?    Size: (.+?)\n    Link: (.+?)\n    Reasons:\n((?:      - .+\n)+)'
 
         # Convert to list to find boundaries between entries
         matches = list(re.finditer(entry_pattern, section_content))
 
         for idx, match in enumerate(matches):
-            index, name, size, link, reasons_block = match.groups()
+            index, name, path, size, link, reasons_block = match.groups()
 
             reasons = [r.strip('- ').strip() for r in reasons_block.strip().split('\n')]
 
@@ -1444,6 +1450,7 @@ def parse_cleanup_report(report_file):
             entry = {
                 'index': int(index),
                 'name': name,
+                'path': path,  # May be None if not present
                 'size': size,
                 'link': link,
                 'file_id': file_id,
@@ -1572,7 +1579,24 @@ def interactive_cleanup(service, report_file, folder_id):
         print("╔" + "═" * 78 + "╗")
         print(format_box_line(f"File {i + 1}/{len(entries)} - {entry['confidence']} CONFIDENCE"))
         print(format_box_separator("═"))
-        print(format_box_line(f"Name: {entry['name'][:68]}"))
+
+        # For duplicates, show full path instead of just name
+        if entry.get('path'):
+            # Show full path for duplicates
+            path = entry['path']
+            if len(path) <= 68:
+                print(format_box_line(f"Path: {path}"))
+            else:
+                # Wrap long paths
+                print(format_box_line(f"Path: {path[:68]}"))
+                remaining = path[68:]
+                while remaining:
+                    print(format_box_line(f"      {remaining[:68]}"))
+                    remaining = remaining[68:]
+        else:
+            # Show just name for non-duplicates
+            print(format_box_line(f"Name: {entry['name'][:68]}"))
+
         print(format_box_line(f"Size: {entry['size']}"))
         print(format_box_separator("─"))
 
