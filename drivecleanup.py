@@ -513,6 +513,8 @@ class FileAnalyzer:
         self.md5_to_files = defaultdict(list)
         # Track folder IDs to names for building paths
         self.folder_id_to_name = {}
+        # Track folder IDs to their parent IDs for path traversal
+        self.folder_id_to_parents = {}
 
     def __del__(self):
         """Cleanup when analyzer is destroyed."""
@@ -698,6 +700,9 @@ class FileAnalyzer:
                             self.stats['total_folders'] += 1
                             # Track folder names for path building
                             self.folder_id_to_name[item['id']] = item['name']
+                            # Track folder parent relationships
+                            if 'parents' in item:
+                                self.folder_id_to_parents[item['id']] = item['parents']
                             # Add subfolder to queue
                             folders_to_scan.append(item['id'])
                         else:
@@ -762,6 +767,9 @@ class FileAnalyzer:
                         self.stats['total_folders'] += 1
                         # Track folder names for path building
                         self.folder_id_to_name[item['id']] = item['name']
+                        # Track folder parent relationships
+                        if 'parents' in item:
+                            self.folder_id_to_parents[item['id']] = item['parents']
                     else:
                         self.all_files.append(item)
                         self.stats['total_files'] += 1
@@ -797,31 +805,76 @@ class FileAnalyzer:
         """
         # Try to load from cache if not refreshing
         if not refresh_cache and os.path.exists(CHECKSUMS_CACHE_FILE):
-            logger.info("Loading MD5 checksums from cache...")
+            logger.info("Loading MD5 checksums and folder structure from cache...")
             try:
                 with open(CHECKSUMS_CACHE_FILE, 'r', encoding='utf-8') as f:
                     cache_data = json.load(f)
 
                 # Reconstruct md5_to_files from cache
-                for md5, files_list in cache_data.items():
+                for md5, files_list in cache_data.get('checksums', {}).items():
                     self.md5_to_files[md5] = files_list
+
+                # Reconstruct folder_id_to_name and folder_id_to_parents from cache
+                self.folder_id_to_name.update(cache_data.get('folders', {}))
+                self.folder_id_to_parents.update(cache_data.get('folder_parents', {}))
 
                 total_files = sum(len(files) for files in self.md5_to_files.values())
                 logger.info(f"Loaded {total_files} files with MD5 checksums from cache")
+                logger.info(f"Loaded {len(self.folder_id_to_name)} folder mappings from cache")
                 logger.info(f"Found {len(self.md5_to_files)} unique checksums")
                 return
             except Exception as e:
                 logger.warning(f"Failed to load cache, will rescan: {e}")
 
-        # Scan entire Drive for checksums
+        # Scan entire Drive for checksums and folder structure
         if refresh_cache:
             logger.info("Refreshing MD5 checksum cache (scanning entire Drive)...")
         else:
             logger.info("Building MD5 checksum cache (scanning entire Drive)...")
 
         page_token = None
-        scanned = 0
+        scanned_files = 0
+        scanned_folders = 0
 
+        # First, scan all folders to build folder hierarchy
+        logger.info("  Scanning folder structure...")
+        page_token = None
+        while True:
+            try:
+                results = self.service.files().list(
+                    pageSize=1000,
+                    pageToken=page_token,
+                    fields="nextPageToken, files(id, name, parents)",
+                    q="trashed=false and mimeType = 'application/vnd.google-apps.folder' and 'me' in owners"
+                ).execute()
+
+                items = results.get('files', [])
+
+                for item in items:
+                    self.folder_id_to_name[item['id']] = item['name']
+                    # Store parent relationship for path traversal
+                    if 'parents' in item:
+                        self.folder_id_to_parents[item['id']] = item['parents']
+                    # Also store in all_folders for backwards compatibility
+                    self.all_folders.append(item)
+                    scanned_folders += 1
+
+                    if scanned_folders % 500 == 0:
+                        logger.info(f"    Scanned {scanned_folders} folders...")
+
+                page_token = results.get('nextPageToken')
+                if not page_token:
+                    break
+
+            except Exception as e:
+                logger.error(f"Error scanning folders: {e}")
+                break
+
+        logger.info(f"  Scanned {scanned_folders} folders")
+
+        # Now scan all files with MD5 checksums
+        logger.info("  Scanning files for checksums...")
+        page_token = None
         while True:
             try:
                 results = self.service.files().list(
@@ -834,10 +887,10 @@ class FileAnalyzer:
                 items = results.get('files', [])
 
                 for item in items:
-                    scanned += 1
+                    scanned_files += 1
 
-                    if scanned % 500 == 0:
-                        logger.info(f"  Scanned {scanned} files for duplicates...")
+                    if scanned_files % 500 == 0:
+                        logger.info(f"    Scanned {scanned_files} files...")
 
                     # Track files by MD5 for duplicate detection (if available)
                     if 'md5Checksum' in item:
@@ -848,17 +901,22 @@ class FileAnalyzer:
                     break
 
             except Exception as e:
-                logger.error(f"Error scanning drive for duplicates: {e}")
+                logger.error(f"Error scanning files for duplicates: {e}")
                 break
 
-        logger.info(f"Duplicate scan complete: scanned {scanned} files across entire Drive")
+        logger.info(f"Duplicate scan complete: scanned {scanned_files} files and {scanned_folders} folders across entire Drive")
 
-        # Save to cache
+        # Save to cache (checksums and folder structure)
         try:
             logger.debug(f"Saving MD5 checksum cache to {CHECKSUMS_CACHE_FILE}")
+            cache_data = {
+                'checksums': dict(self.md5_to_files),
+                'folders': self.folder_id_to_name,
+                'folder_parents': self.folder_id_to_parents
+            }
             with open(CHECKSUMS_CACHE_FILE, 'w', encoding='utf-8') as f:
-                json.dump(dict(self.md5_to_files), f, indent=2)
-            logger.info("MD5 checksum cache saved successfully")
+                json.dump(cache_data, f, indent=2)
+            logger.info("MD5 checksum and folder structure cache saved successfully")
         except Exception as e:
             logger.warning(f"Failed to save checksum cache: {e}")
 
@@ -881,12 +939,16 @@ class FileAnalyzer:
             if parent_id in self.folder_id_to_name:
                 path_parts.insert(0, self.folder_id_to_name[parent_id])
 
-            # Find parent's parents
-            parents = []
-            for folder in self.all_folders:
-                if folder['id'] == parent_id:
-                    parents = folder.get('parents', [])
-                    break
+            # Find parent's parents using cached mapping
+            if parent_id in self.folder_id_to_parents:
+                parents = self.folder_id_to_parents[parent_id]
+            else:
+                # Fallback: search in all_folders (for backwards compatibility)
+                parents = []
+                for folder in self.all_folders:
+                    if folder['id'] == parent_id:
+                        parents = folder.get('parents', [])
+                        break
 
         return '/'.join(path_parts)
 
