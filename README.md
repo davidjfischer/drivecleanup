@@ -6,6 +6,7 @@ Intelligent Google Drive cleanup tool with Claude AI analysis via AWS Bedrock.
 
 - 🤖 **Claude AI Analysis**: Intelligent content summarization using AWS Bedrock
 - 🔍 **Smart Detection**: Identifies obsolete files while protecting photos, videos, and music
+- 🔗 **Duplicate Detection**: Automatically finds duplicate files by MD5 checksum and marks them for deletion with HIGH confidence
 - 📄 **Content Extraction**: Reads PDFs, Word docs, Excel files, and Google Docs
 - ⚡ **Single-Key Controls**: Fast interactive cleanup with no Enter key needed
 - 📊 **Comprehensive Logging**: Full session logs and file tracking

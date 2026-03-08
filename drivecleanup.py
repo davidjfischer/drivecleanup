@@ -503,8 +503,13 @@ class FileAnalyzer:
             'total_folders': 0,
             'total_size': 0,
             'potential_savings': 0,
-            'content_analyzed': 0
+            'content_analyzed': 0,
+            'duplicates_found': 0
         }
+        # Track files by MD5 hash for duplicate detection
+        self.md5_to_files = defaultdict(list)
+        # Track folder IDs to names for building paths
+        self.folder_id_to_name = {}
 
     def __del__(self):
         """Cleanup when analyzer is destroyed."""
@@ -663,7 +668,7 @@ class FileAnalyzer:
                     results = self.service.files().list(
                         pageSize=1000,
                         pageToken=page_token,
-                        fields="nextPageToken, files(id, name, mimeType, size, modifiedTime, viewedByMeTime, parents, trashed, webViewLink)",
+                        fields="nextPageToken, files(id, name, mimeType, size, modifiedTime, viewedByMeTime, parents, trashed, webViewLink, md5Checksum)",
                         q=f"'{current_folder}' in parents and trashed=false"
                     ).execute()
 
@@ -679,6 +684,8 @@ class FileAnalyzer:
                         if item['mimeType'] == 'application/vnd.google-apps.folder':
                             self.all_folders.append(item)
                             self.stats['total_folders'] += 1
+                            # Track folder names for path building
+                            self.folder_id_to_name[item['id']] = item['name']
                             # Add subfolder to queue
                             folders_to_scan.append(item['id'])
                         else:
@@ -688,6 +695,10 @@ class FileAnalyzer:
                             # Add to total size (if available)
                             if 'size' in item:
                                 self.stats['total_size'] += int(item['size'])
+
+                            # Track files by MD5 for duplicate detection (if available)
+                            if 'md5Checksum' in item:
+                                self.md5_to_files[item['md5Checksum']].append(item)
 
                         if scanned_count >= max_files:
                             logger.warning(f"Reached maximum scan limit of {max_files} files")
@@ -721,7 +732,7 @@ class FileAnalyzer:
                 results = self.service.files().list(
                     pageSize=1000,
                     pageToken=page_token,
-                    fields="nextPageToken, files(id, name, mimeType, size, modifiedTime, viewedByMeTime, parents, trashed, webViewLink)",
+                    fields="nextPageToken, files(id, name, mimeType, size, modifiedTime, viewedByMeTime, parents, trashed, webViewLink, md5Checksum)",
                     q="trashed=false"
                 ).execute()
 
@@ -737,6 +748,8 @@ class FileAnalyzer:
                     if item['mimeType'] == 'application/vnd.google-apps.folder':
                         self.all_folders.append(item)
                         self.stats['total_folders'] += 1
+                        # Track folder names for path building
+                        self.folder_id_to_name[item['id']] = item['name']
                     else:
                         self.all_files.append(item)
                         self.stats['total_files'] += 1
@@ -744,6 +757,10 @@ class FileAnalyzer:
                         # Add to total size (if available)
                         if 'size' in item:
                             self.stats['total_size'] += int(item['size'])
+
+                        # Track files by MD5 for duplicate detection (if available)
+                        if 'md5Checksum' in item:
+                            self.md5_to_files[item['md5Checksum']].append(item)
 
                     if scanned >= max_files:
                         logger.warning(f"Reached maximum scan limit of {max_files} files")
@@ -760,9 +777,70 @@ class FileAnalyzer:
         logger.info(f"Scan complete: {self.stats['total_files']} files, {self.stats['total_folders']} folders")
         logger.info(f"Total size: {self.stats['total_size'] / (1024**3):.2f} GB")
 
+    def get_file_path(self, file_item):
+        """Build the full path to a file from its parent folders."""
+        path_parts = [file_item['name']]
+        parents = file_item.get('parents', [])
+
+        # Walk up the parent chain
+        visited = set()
+        while parents and len(parents) > 0:
+            parent_id = parents[0]
+
+            # Avoid infinite loops
+            if parent_id in visited:
+                break
+            visited.add(parent_id)
+
+            # Get parent folder name
+            if parent_id in self.folder_id_to_name:
+                path_parts.insert(0, self.folder_id_to_name[parent_id])
+
+            # Find parent's parents
+            parents = []
+            for folder in self.all_folders:
+                if folder['id'] == parent_id:
+                    parents = folder.get('parents', [])
+                    break
+
+        return '/'.join(path_parts)
+
     def analyze_files(self):
         """Analyze all files for deletion candidates."""
         logger.info("Analyzing files for deletion candidates...")
+
+        # First, detect duplicates
+        logger.info("Checking for duplicate files by MD5 checksum...")
+        duplicates_found = 0
+        for md5, files_with_hash in self.md5_to_files.items():
+            if len(files_with_hash) > 1:
+                # Found duplicates - mark all but the first one
+                duplicates_found += len(files_with_hash) - 1
+                for duplicate_file in files_with_hash[1:]:
+                    # Find the original file (first one)
+                    original_file = files_with_hash[0]
+                    original_path = self.get_file_path(original_file)
+
+                    candidate = {
+                        'id': duplicate_file['id'],
+                        'name': duplicate_file['name'],
+                        'size': int(duplicate_file.get('size', 0)) if 'size' in duplicate_file else 0,
+                        'modified': duplicate_file.get('modifiedTime'),
+                        'viewed': duplicate_file.get('viewedByMeTime'),
+                        'reasons': [f"Duplicate file - original at: {original_path}"],
+                        'link': duplicate_file.get('webViewLink', 'N/A'),
+                        'age_days': 0,
+                        'mime_type': duplicate_file.get('mimeType', 'Unknown'),
+                        'summary': None
+                    }
+
+                    self.delete_candidates['HIGH'].append(candidate)
+                    if 'size' in duplicate_file:
+                        self.stats['potential_savings'] += int(duplicate_file['size'])
+
+        self.stats['duplicates_found'] = duplicates_found
+        if duplicates_found > 0:
+            logger.info(f"Found {duplicates_found} duplicate files")
 
         for i, file_item in enumerate(self.all_files):
             if (i + 1) % 500 == 0:
@@ -811,7 +889,7 @@ class FileAnalyzer:
                     self.stats['potential_savings'] += size
 
         logger.info(f"Analysis complete!")
-        logger.info(f"Found {len(self.delete_candidates['HIGH'])} HIGH confidence candidates")
+        logger.info(f"Found {len(self.delete_candidates['HIGH'])} HIGH confidence candidates (including {self.stats['duplicates_found']} duplicates)")
         logger.info(f"Found {len(self.delete_candidates['MEDIUM'])} MEDIUM confidence candidates")
         logger.info(f"Found {len(self.delete_candidates['LOW'])} LOW confidence candidates")
         logger.info(f"Potential space savings: {self.stats['potential_savings'] / (1024**3):.2f} GB")
@@ -997,11 +1075,13 @@ class FileAnalyzer:
         report_lines.append(f"Total files scanned: {self.stats['total_files']}")
         report_lines.append(f"Total folders scanned: {self.stats['total_folders']}")
         report_lines.append(f"Total size: {self.stats['total_size'] / (1024**3):.2f} GB")
+        if self.stats['duplicates_found'] > 0:
+            report_lines.append(f"Duplicate files found: {self.stats['duplicates_found']}")
         if self.analyze_content:
             report_lines.append(f"Files with content analyzed: {self.stats['content_analyzed']}")
         report_lines.append("")
         report_lines.append(f"Delete candidates found:")
-        report_lines.append(f"  HIGH confidence:   {len([c for c in self.delete_candidates['HIGH'] if 'id' in c])} items")
+        report_lines.append(f"  HIGH confidence:   {len([c for c in self.delete_candidates['HIGH'] if 'id' in c])} items (including {self.stats['duplicates_found']} duplicates)")
         report_lines.append(f"  MEDIUM confidence: {len([c for c in self.delete_candidates['MEDIUM'] if 'id' in c])} items")
         report_lines.append(f"  LOW confidence:    {len([c for c in self.delete_candidates['LOW'] if 'id' in c])} items")
         report_lines.append("")
@@ -1253,6 +1333,39 @@ def format_box_separator(char="─", width=BOX_WIDTH):
     """Format a separator line for the dialog box."""
     return "╠" + char * width + "╣"
 
+def print_colored_tip_box(lines, color_code='\033[93m'):
+    """
+    Print a colored tip box with multiple lines of text.
+    Default color is yellow (93m).
+    Color codes: 91m=red, 92m=green, 93m=yellow, 94m=blue, 95m=magenta, 96m=cyan
+    """
+    reset = '\033[0m'
+    width = BOX_WIDTH
+
+    print()
+    print(f"{color_code}╔" + "═" * width + "╗" + reset)
+
+    for line in lines:
+        # Word wrap if needed
+        if len(line) <= width - 2:
+            print(f"{color_code}║ {line}{' ' * (width - 2 - len(line))} ║{reset}")
+        else:
+            # Simple word wrap
+            words = line.split()
+            current_line = ""
+            for word in words:
+                if len(current_line + word + " ") <= width - 2:
+                    current_line += word + " "
+                else:
+                    if current_line:
+                        print(f"{color_code}║ {current_line.rstrip()}{' ' * (width - 2 - len(current_line.rstrip()))} ║{reset}")
+                    current_line = word + " "
+            if current_line:
+                print(f"{color_code}║ {current_line.rstrip()}{' ' * (width - 2 - len(current_line.rstrip()))} ║{reset}")
+
+    print(f"{color_code}╚" + "═" * width + "╝" + reset)
+    print()
+
 def interactive_cleanup(service, report_file, folder_id):
     """Interactive cleanup session based on report."""
     import webbrowser
@@ -1479,10 +1592,13 @@ def interactive_cleanup(service, report_file, folder_id):
                 print(f"  Deleted: {deleted_log}")
                 print(f"  Skipped: {skipped_log}")
 
-                # Colored message advising to rerun for empty folder detection
-                print("\n\033[96m💡 TIP: Rerun the script to detect newly empty folders!\033[0m")
-                print("\033[96m   Deleting files may have created empty folders that can now be removed.\033[0m")
-                logger.info("TIP: User advised to rerun script to detect newly empty folders")
+                # Colored tip box advising to rerun for empty folder detection
+                print_colored_tip_box([
+                    "💡 TIP: Rerun the script to detect newly empty folders!",
+                    "",
+                    "Deleting files may have created empty folders that can now",
+                    "be removed. Run the script again to detect them."
+                ])
 
                 print("═" * 80)
                 return
@@ -1517,10 +1633,13 @@ def interactive_cleanup(service, report_file, folder_id):
     print(f"  Deleted: {deleted_log}")
     print(f"  Skipped: {skipped_log}")
 
-    # Colored message advising to rerun for empty folder detection
-    print("\n\033[96m💡 TIP: Rerun the script to detect newly empty folders!\033[0m")
-    print("\033[96m   Deleting files may have created empty folders that can now be removed.\033[0m")
-    logger.info("TIP: User advised to rerun script to detect newly empty folders")
+    # Colored tip box advising to rerun for empty folder detection
+    print_colored_tip_box([
+        "💡 TIP: Rerun the script to detect newly empty folders!",
+        "",
+        "Deleting files may have created empty folders that can now",
+        "be removed. Run the script again to detect them."
+    ])
 
     print("═" * 80 + "\n")
 
