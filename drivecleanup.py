@@ -680,7 +680,7 @@ class FileAnalyzer:
                         pageSize=1000,
                         pageToken=page_token,
                         fields="nextPageToken, files(id, name, mimeType, size, modifiedTime, viewedByMeTime, parents, trashed, webViewLink, md5Checksum)",
-                        q=f"'{current_folder}' in parents and trashed=false"
+                        q=f"'{current_folder}' in parents and trashed=false and 'me' in owners"
                     ).execute()
 
                     items = results.get('files', [])
@@ -744,7 +744,7 @@ class FileAnalyzer:
                     pageSize=1000,
                     pageToken=page_token,
                     fields="nextPageToken, files(id, name, mimeType, size, modifiedTime, viewedByMeTime, parents, trashed, webViewLink, md5Checksum)",
-                    q="trashed=false"
+                    q="trashed=false and 'me' in owners"
                 ).execute()
 
                 items = results.get('files', [])
@@ -827,7 +827,7 @@ class FileAnalyzer:
                     pageSize=1000,
                     pageToken=page_token,
                     fields="nextPageToken, files(id, name, mimeType, parents, md5Checksum)",
-                    q="trashed=false and mimeType != 'application/vnd.google-apps.folder'"
+                    q="trashed=false and mimeType != 'application/vnd.google-apps.folder' and 'me' in owners"
                 ).execute()
 
                 items = results.get('files', [])
@@ -1054,7 +1054,7 @@ class FileAnalyzer:
             # Get all children
             results = self.service.files().list(
                 pageSize=1000,
-                q=f"'{folder_id}' in parents and trashed=false",
+                q=f"'{folder_id}' in parents and trashed=false and 'me' in owners",
                 fields="files(id, mimeType)"
             ).execute()
 
@@ -1105,7 +1105,7 @@ class FileAnalyzer:
                     # Check if completely empty or has empty subfolders
                     results = self.service.files().list(
                         pageSize=1,
-                        q=f"'{folder_id}' in parents and trashed=false",
+                        q=f"'{folder_id}' in parents and trashed=false and 'me' in owners",
                         fields="files(id)"
                     ).execute()
 

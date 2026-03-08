@@ -108,6 +108,11 @@ The following file types are **never** suggested for deletion:
 - Videos (MP4, MOV, etc.)
 - Audio files (MP3, M4A, etc.)
 
+**Shared files/folders** are automatically excluded:
+- Files and folders shared with you (but not owned by you) are excluded from all scans
+- Only files you own are analyzed and considered for deletion
+- This prevents suggesting deletion of files in someone else's Drive
+
 ## Configuration
 
 ### AWS Bedrock Settings
