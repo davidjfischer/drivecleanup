@@ -1,0 +1,12 @@
+Analyze this file content and provide:
+1. A brief summary (2-3 sentences) of what this file contains
+2. An assessment of whether this file seems important or can likely be deleted
+
+File name: {file_name}
+
+Content:
+{text}
+
+Please respond in this format:
+Summary: [your summary]
+Assessment: [KEEP/DELETE] - [reasoning]
