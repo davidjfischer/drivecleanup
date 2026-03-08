@@ -1779,11 +1779,15 @@ def interactive_cleanup(service, report_file, folder_id):
                     logger.error("This should not happen - please report as bug")
                     break
 
-                logger.debug(f"Attempting to delete file ID: {entry['file_id']}")
+                logger.debug(f"Attempting to move file to trash: {entry['file_id']}")
                 try:
-                    service.files().delete(fileId=entry['file_id']).execute()
-                    logger.info(f"✅ Deleted: {entry['name']}")
-                    print(f"✅ Deleted successfully!")
+                    # Move to trash instead of permanent delete
+                    service.files().update(
+                        fileId=entry['file_id'],
+                        body={'trashed': True}
+                    ).execute()
+                    logger.info(f"✅ Moved to trash: {entry['name']}")
+                    print(f"✅ Moved to trash successfully!")
                     logger.debug(f"Freed up {entry['size']}")
                     log_deleted_file(folder_id, entry['name'], entry['link'], entry['size'])
                     deleted_files.add(entry['file_id'])
@@ -2028,22 +2032,48 @@ Examples:
     setup_file_logging(folder_id, start_time)
 
     # Determine which operations to run
-    run_analyze = args.analyze
-    run_clean = args.clean
-
-    # If neither specified, run both
-    if not run_analyze and not run_clean:
+    # If no flags specified, run all steps
+    if not args.refresh_checksums and not args.analyze and not args.clean:
+        run_refresh = True
         run_analyze = True
         run_clean = True
-        logger.info("Mode: Full workflow (Analyze + Clean)")
-    elif run_analyze and run_clean:
-        logger.info("Mode: Full workflow (Analyze + Clean)")
-    elif run_analyze:
-        logger.info("Mode: Analysis only")
-    elif run_clean:
-        logger.info("Mode: Interactive cleanup only")
+        logger.info("Mode: Full workflow (Refresh + Analyze + Clean)")
+    else:
+        run_refresh = args.refresh_checksums
+        run_analyze = args.analyze
+        run_clean = args.clean
+
+        steps = []
+        if run_refresh:
+            steps.append("Refresh")
+        if run_analyze:
+            steps.append("Analyze")
+        if run_clean:
+            steps.append("Clean")
+        logger.info(f"Mode: {' + '.join(steps)}")
 
     logger.info("")
+
+    # ========================================================================
+    # REFRESH CHECKSUMS PHASE
+    # ========================================================================
+    if run_refresh:
+        logger.info("=" * 80)
+        logger.info("PHASE: REFRESH CHECKSUMS")
+        logger.info("=" * 80)
+
+        # Authenticate (read-only)
+        logger.info("Authenticating with Google Drive API...")
+        service = authenticate(write_access=False)
+        logger.info("Authentication successful!")
+
+        # Create temporary analyzer just for refresh
+        temp_analyzer = FileAnalyzer(service)
+        temp_analyzer.scan_drive_for_duplicates(refresh_cache=True)
+
+        logger.info("")
+        logger.info("✅ Checksum cache refreshed successfully")
+        logger.info("")
 
     # ========================================================================
     # ANALYSIS PHASE
@@ -2100,7 +2130,8 @@ Examples:
         # Scan drive (folder-specific or entire drive)
         if folder_id:
             # For folder scans, first scan entire Drive for duplicate detection
-            analyzer.scan_drive_for_duplicates(refresh_cache=args.refresh_checksums)
+            # refresh_cache=False because refresh is now a separate phase
+            analyzer.scan_drive_for_duplicates(refresh_cache=False)
             # Then scan the specific folder in detail
             analyzer.scan_folder(folder_id, max_files=args.max_files)
         else:
