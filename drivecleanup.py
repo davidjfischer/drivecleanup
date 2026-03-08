@@ -894,18 +894,34 @@ class FileAnalyzer:
         """Analyze all files for deletion candidates."""
         logger.info("Analyzing files for deletion candidates...")
 
-        # First, detect duplicates
+        # Create a set of file IDs in the scanned folder for quick lookup
+        scanned_file_ids = {file_item['id'] for file_item in self.all_files}
+
+        # First, detect duplicates (only for files in the scanned folder)
         logger.info("Checking for duplicate files by MD5 checksum...")
         duplicates_found = 0
         for md5, files_with_hash in self.md5_to_files.items():
             if len(files_with_hash) > 1:
-                # Found duplicates - mark all but the first one
-                duplicates_found += len(files_with_hash) - 1
-                for duplicate_file in files_with_hash[1:]:
-                    # Find the original file (first one)
-                    original_file = files_with_hash[0]
-                    original_path = self.get_file_path(original_file)
+                # Check if any of these duplicates are in our scanned folder
+                duplicates_in_folder = [f for f in files_with_hash if f['id'] in scanned_file_ids]
 
+                if not duplicates_in_folder:
+                    # None of these duplicates are in our folder, skip
+                    continue
+
+                # Keep the oldest file (first by modified time) as original, mark others as duplicates
+                # Sort by modified time to keep oldest
+                sorted_files = sorted(files_with_hash, key=lambda f: f.get('modifiedTime', ''), reverse=False)
+                original_file = sorted_files[0]
+                original_path = self.get_file_path(original_file)
+
+                # Mark duplicates that are in our scanned folder
+                for duplicate_file in sorted_files[1:]:
+                    if duplicate_file['id'] not in scanned_file_ids:
+                        # This duplicate is not in our folder, skip it
+                        continue
+
+                    duplicates_found += 1
                     candidate = {
                         'id': duplicate_file['id'],
                         'name': duplicate_file['name'],
@@ -925,7 +941,7 @@ class FileAnalyzer:
 
         self.stats['duplicates_found'] = duplicates_found
         if duplicates_found > 0:
-            logger.info(f"Found {duplicates_found} duplicate files")
+            logger.info(f"Found {duplicates_found} duplicate files in scanned folder")
 
         for i, file_item in enumerate(self.all_files):
             if (i + 1) % 500 == 0:
