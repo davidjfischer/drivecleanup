@@ -1538,10 +1538,24 @@ def format_box_separator(char="─", width=BOX_WIDTH):
     """Format a separator line for the dialog box."""
     return "╠" + char * width + "╣"
 
-def print_colored_tip_box(lines, color_code='\033[93m'):
+def get_display_width(text):
+    """
+    Calculate the display width of text, accounting for emojis being 2 characters wide.
+    """
+    import unicodedata
+    width = 0
+    for char in text:
+        # Check if character is an emoji or wide character
+        if unicodedata.east_asian_width(char) in ('F', 'W'):
+            width += 2
+        else:
+            width += 1
+    return width
+
+def print_colored_tip_box(lines, color_code='\033[91m'):
     """
     Print a colored tip box with multiple lines of text.
-    Default color is yellow (93m).
+    Default color is red (91m).
     Color codes: 91m=red, 92m=green, 93m=yellow, 94m=blue, 95m=magenta, 96m=cyan
     """
     reset = '\033[0m'
@@ -1551,22 +1565,40 @@ def print_colored_tip_box(lines, color_code='\033[93m'):
     print(f"{color_code}╔" + "═" * width + "╗" + reset)
 
     for line in lines:
+        # Calculate actual display width
+        display_width = get_display_width(line)
+        padding_needed = width - 2 - display_width
+
         # Word wrap if needed
-        if len(line) <= width - 2:
-            print(f"{color_code}║ {line}{' ' * (width - 2 - len(line))} ║{reset}")
+        if display_width <= width - 2:
+            print(f"{color_code}║ {line}{' ' * padding_needed} ║{reset}")
         else:
-            # Simple word wrap
+            # Word wrap considering display width
             words = line.split()
             current_line = ""
+            current_width = 0
+
             for word in words:
-                if len(current_line + word + " ") <= width - 2:
-                    current_line += word + " "
+                word_with_space = word + " "
+                word_width = get_display_width(word_with_space)
+
+                if current_width + word_width <= width - 2:
+                    current_line += word_with_space
+                    current_width += word_width
                 else:
                     if current_line:
-                        print(f"{color_code}║ {current_line.rstrip()}{' ' * (width - 2 - len(current_line.rstrip()))} ║{reset}")
+                        line_stripped = current_line.rstrip()
+                        line_display_width = get_display_width(line_stripped)
+                        padding = width - 2 - line_display_width
+                        print(f"{color_code}║ {line_stripped}{' ' * padding} ║{reset}")
                     current_line = word + " "
+                    current_width = get_display_width(current_line)
+
             if current_line:
-                print(f"{color_code}║ {current_line.rstrip()}{' ' * (width - 2 - len(current_line.rstrip()))} ║{reset}")
+                line_stripped = current_line.rstrip()
+                line_display_width = get_display_width(line_stripped)
+                padding = width - 2 - line_display_width
+                print(f"{color_code}║ {line_stripped}{' ' * padding} ║{reset}")
 
     print(f"{color_code}╚" + "═" * width + "╝" + reset)
     print()
