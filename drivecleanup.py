@@ -822,7 +822,12 @@ class FileAnalyzer:
                 logger.info(f"Loaded {total_files} files with MD5 checksums from cache")
                 logger.info(f"Loaded {len(self.folder_id_to_name)} folder mappings from cache")
                 logger.info(f"Found {len(self.md5_to_files)} unique checksums")
-                return
+
+                # If cache is empty, rescan instead of using it
+                if total_files == 0:
+                    logger.warning("Cache is empty, will rescan entire Drive")
+                else:
+                    return  # Cache loaded successfully with data
             except Exception as e:
                 logger.warning(f"Failed to load cache, will rescan: {e}")
 
