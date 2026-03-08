@@ -147,6 +147,25 @@ Customize the minimum age threshold:
 - Very old files (> 1 year) get higher confidence scores
 - Combine with other criteria (filename patterns, size) for better accuracy
 
+### Checksum Cache
+
+For faster duplicate detection, the tool caches MD5 checksums of all files in your Drive.
+
+**Default behavior:**
+- First run: Scans entire Drive to build cache (stored in `state/drive_checksums_cache.json`)
+- Subsequent runs: Loads checksums from cache (much faster)
+
+**Force refresh the cache:**
+```bash
+# Rescan entire Drive to update checksum cache
+uv run python drivecleanup.py FOLDER_ID --refresh_checksums
+```
+
+**When to refresh:**
+- After adding/modifying many files in your Drive
+- If duplicate detection seems outdated
+- Cache file is automatically created/updated as needed
+
 ## Logging
 
 The tool provides comprehensive logging:

@@ -11,6 +11,7 @@ import io
 import tempfile
 import re
 import glob
+import json
 from datetime import datetime, timezone, timedelta
 from collections import defaultdict
 from googleapiclient.discovery import build
@@ -55,7 +56,6 @@ except ImportError:
 # AWS Bedrock for Claude
 try:
     import boto3
-    import json
     HAS_BEDROCK = True
 except ImportError:
     HAS_BEDROCK = False
@@ -68,6 +68,9 @@ SCOPES_WRITE = ['https://www.googleapis.com/auth/drive']  # For deletion
 STATE_DIR = 'state'
 REPORTS_DIR = 'reports'
 LOGS_DIR = 'logs'
+
+# Cache file for MD5 checksums
+CHECKSUMS_CACHE_FILE = os.path.join(STATE_DIR, 'drive_checksums_cache.json')
 
 # UI Box formatting constants
 BOX_WIDTH = 78
@@ -785,9 +788,35 @@ class FileAnalyzer:
         logger.info(f"Scan complete: {self.stats['total_files']} files, {self.stats['total_folders']} folders")
         logger.info(f"Total size: {self.stats['total_size'] / (1024**3):.2f} GB")
 
-    def scan_drive_for_duplicates(self):
-        """Lightweight scan of entire Drive to populate MD5 checksums for duplicate detection."""
-        logger.info("Scanning entire Drive for duplicate detection...")
+    def scan_drive_for_duplicates(self, refresh_cache=False):
+        """Lightweight scan of entire Drive to populate MD5 checksums for duplicate detection.
+
+        Args:
+            refresh_cache: If True, ignore cache and rescan entire Drive
+        """
+        # Try to load from cache if not refreshing
+        if not refresh_cache and os.path.exists(CHECKSUMS_CACHE_FILE):
+            logger.info("Loading MD5 checksums from cache...")
+            try:
+                with open(CHECKSUMS_CACHE_FILE, 'r', encoding='utf-8') as f:
+                    cache_data = json.load(f)
+
+                # Reconstruct md5_to_files from cache
+                for md5, files_list in cache_data.items():
+                    self.md5_to_files[md5] = files_list
+
+                total_files = sum(len(files) for files in self.md5_to_files.values())
+                logger.info(f"Loaded {total_files} files with MD5 checksums from cache")
+                logger.info(f"Found {len(self.md5_to_files)} unique checksums")
+                return
+            except Exception as e:
+                logger.warning(f"Failed to load cache, will rescan: {e}")
+
+        # Scan entire Drive for checksums
+        if refresh_cache:
+            logger.info("Refreshing MD5 checksum cache (scanning entire Drive)...")
+        else:
+            logger.info("Building MD5 checksum cache (scanning entire Drive)...")
 
         page_token = None
         scanned = 0
@@ -822,6 +851,15 @@ class FileAnalyzer:
                 break
 
         logger.info(f"Duplicate scan complete: scanned {scanned} files across entire Drive")
+
+        # Save to cache
+        try:
+            logger.debug(f"Saving MD5 checksum cache to {CHECKSUMS_CACHE_FILE}")
+            with open(CHECKSUMS_CACHE_FILE, 'w', encoding='utf-8') as f:
+                json.dump(dict(self.md5_to_files), f, indent=2)
+            logger.info("MD5 checksum cache saved successfully")
+        except Exception as e:
+            logger.warning(f"Failed to save checksum cache: {e}")
 
     def get_file_path(self, file_item):
         """Build the full path to a file from its parent folders."""
@@ -1787,6 +1825,12 @@ Examples:
         help='Minimum age in days for files to be considered for deletion (default: 90)'
     )
 
+    parser.add_argument(
+        '--refresh_checksums',
+        action='store_true',
+        help='Force refresh of MD5 checksum cache by rescanning entire Drive'
+    )
+
     args = parser.parse_args()
 
     # Record start time for logging
@@ -1874,7 +1918,7 @@ Examples:
         # Scan drive (folder-specific or entire drive)
         if folder_id:
             # For folder scans, first scan entire Drive for duplicate detection
-            analyzer.scan_drive_for_duplicates()
+            analyzer.scan_drive_for_duplicates(refresh_cache=args.refresh_checksums)
             # Then scan the specific folder in detail
             analyzer.scan_folder(folder_id, max_files=args.max_files)
         else:
