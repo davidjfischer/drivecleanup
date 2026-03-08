@@ -69,6 +69,27 @@ STATE_DIR = 'state'
 REPORTS_DIR = 'reports'
 LOGS_DIR = 'logs'
 
+# UI Box formatting constants
+BOX_WIDTH = 78
+BOX_TOTAL_WIDTH = 80  # BOX_WIDTH + 2 for borders
+BOX_MAX_TEXT_WIDTH = 74  # For content with bullet points
+BOX_CONTENT_MAX_WIDTH = 72  # For indented content
+
+# Content extraction limits
+MAX_PDF_PAGES = 3
+MAX_WORD_PARAGRAPHS = 20
+MAX_EXCEL_ROWS = 10
+MAX_TEXT_CHARS = 5000
+MAX_CLAUDE_CHARS = 15000
+
+# Content analysis limits
+MAX_FILES_WITH_CLAUDE = 50
+MAX_FILES_WITHOUT_CLAUDE = 100
+MAX_SUMMARY_WORDS = 50
+
+# Report display limits
+MAX_CANDIDATES_IN_REPORT = 50
+
 # Create directories
 os.makedirs(STATE_DIR, exist_ok=True)
 os.makedirs(REPORTS_DIR, exist_ok=True)
@@ -301,8 +322,8 @@ class ContentExtractor:
             text = []
             with open(file_path, 'rb') as f:
                 pdf_reader = PyPDF2.PdfReader(f)
-                # Extract first 3 pages
-                for i in range(min(3, len(pdf_reader.pages))):
+                # Extract first few pages
+                for i in range(min(MAX_PDF_PAGES, len(pdf_reader.pages))):
                     page = pdf_reader.pages[i]
                     text.append(page.extract_text())
 
@@ -322,8 +343,8 @@ class ContentExtractor:
 
         try:
             doc = Document(file_path)
-            # Extract first 20 paragraphs
-            paragraphs = [p.text for p in doc.paragraphs[:20]]
+            # Extract first paragraphs
+            paragraphs = [p.text for p in doc.paragraphs[:MAX_WORD_PARAGRAPHS]]
             text = '\n'.join(paragraphs)
 
             os.remove(file_path)
@@ -346,9 +367,9 @@ class ContentExtractor:
 
             # Get first sheet
             sheet = workbook.active
-            # Get first 10 rows
+            # Get first rows
             for i, row in enumerate(sheet.iter_rows(values_only=True)):
-                if i >= 10:
+                if i >= MAX_EXCEL_ROWS:
                     break
                 row_text = '\t'.join([str(cell) if cell is not None else '' for cell in row])
                 text.append(row_text)
@@ -367,8 +388,8 @@ class ContentExtractor:
         try:
             request = self.service.files().get_media(fileId=file_id)
             content = request.execute()
-            # Return first 5000 characters
-            return content.decode('utf-8', errors='ignore')[:5000]
+            # Return first characters
+            return content.decode('utf-8', errors='ignore')[:MAX_TEXT_CHARS]
         except Exception as e:
             logger.debug(f"Error reading text file: {e}")
             return None
@@ -399,9 +420,8 @@ class ContentExtractor:
             return ContentExtractor.create_summary(text)
 
         # Truncate text if too long (Claude has token limits)
-        max_chars = 15000
-        if len(text) > max_chars:
-            text = text[:max_chars] + "... [truncated]"
+        if len(text) > MAX_CLAUDE_CHARS:
+            text = text[:MAX_CLAUDE_CHARS] + "... [truncated]"
 
         prompt = f"""Analyze this file content and provide:
 1. A brief summary (2-3 sentences) of what this file contains
@@ -828,7 +848,7 @@ class FileAnalyzer:
         logger.info(f"Analyzing content (this may take a while)...")
 
         # Limit files based on whether we're using Claude (more expensive) or not
-        max_files = 50 if self.use_claude else 100
+        max_files = MAX_FILES_WITH_CLAUDE if self.use_claude else MAX_FILES_WITHOUT_CLAUDE
 
         for i, candidate in enumerate(extractable[:max_files]):
             if (i + 1) % 10 == 0:
@@ -850,7 +870,7 @@ class FileAnalyzer:
                             self.bedrock_client
                         )
                     else:
-                        summary = ContentExtractor.create_summary(text, max_words=50)
+                        summary = ContentExtractor.create_summary(text, max_words=MAX_SUMMARY_WORDS)
 
                     candidate['summary'] = summary
                     self.stats['content_analyzed'] += 1
@@ -1002,7 +1022,7 @@ class FileAnalyzer:
             # Sort by size (largest first)
             sorted_candidates = sorted(candidates, key=lambda x: x.get('size', 0), reverse=True)
 
-            for i, candidate in enumerate(sorted_candidates[:50], 1):  # Show top 50
+            for i, candidate in enumerate(sorted_candidates[:MAX_CANDIDATES_IN_REPORT], 1):
                 size = candidate.get('size', 0)
                 size_str = f"{size / (1024**2):.2f} MB" if size > 1024*1024 else f"{size / 1024:.2f} KB"
 
@@ -1019,9 +1039,9 @@ class FileAnalyzer:
                     report_lines.append(f"    Content Summary:")
                     report_lines.append(f"      {candidate['summary']}")
 
-            if len(sorted_candidates) > 50:
+            if len(sorted_candidates) > MAX_CANDIDATES_IN_REPORT:
                 report_lines.append("")
-                report_lines.append(f"... and {len(sorted_candidates) - 50} more items")
+                report_lines.append(f"... and {len(sorted_candidates) - MAX_CANDIDATES_IN_REPORT} more items")
 
         report_lines.append("")
         report_lines.append("=" * 80)
@@ -1219,15 +1239,17 @@ def parse_cleanup_report(report_file):
 
     return entries
 
-def format_box_line(text, width=78):
+def format_box_line(text, width=BOX_WIDTH):
     """Format a line for the dialog box with exact width."""
-    # Ensure text doesn't exceed width
-    if len(text) > width:
-        text = text[:width]
+    # Account for "║ " and " ║" (4 characters total)
+    max_text_width = width - 2
+    # Ensure text doesn't exceed max width
+    if len(text) > max_text_width:
+        text = text[:max_text_width]
     # Pad with spaces to exact width
-    return "║ " + text + " " * (width - len(text) - 2) + " ║"
+    return "║ " + text + " " * (max_text_width - len(text)) + " ║"
 
-def format_box_separator(char="─", width=78):
+def format_box_separator(char="─", width=BOX_WIDTH):
     """Format a separator line for the dialog box."""
     return "╠" + char * width + "╣"
 
@@ -1311,14 +1333,14 @@ def interactive_cleanup(service, report_file, folder_id):
             # Wrap long reasons
             reason_lines = []
             reason_text = f"  • {reason}"
-            if len(reason_text) <= 74:
+            if len(reason_text) <= BOX_MAX_TEXT_WIDTH:
                 reason_lines.append(reason_text)
             else:
                 # Word wrap
                 words = reason.split()
                 current_line = "  • "
                 for word in words:
-                    if len(current_line + word + " ") <= 74:
+                    if len(current_line + word + " ") <= BOX_MAX_TEXT_WIDTH:
                         current_line += word + " "
                     else:
                         reason_lines.append(current_line.rstrip())
@@ -1336,14 +1358,14 @@ def interactive_cleanup(service, report_file, folder_id):
             summary_lines = entry['summary'].split('\n')
             for line in summary_lines:
                 # Wrap long lines
-                if len(line) <= 72:
+                if len(line) <= BOX_CONTENT_MAX_WIDTH:
                     print(format_box_line(f"  {line}"))
                 else:
                     # Word wrap
                     words = line.split()
                     current_line = "  "
                     for word in words:
-                        if len(current_line + word + " ") <= 74:
+                        if len(current_line + word + " ") <= BOX_MAX_TEXT_WIDTH:
                             current_line += word + " "
                         else:
                             print(format_box_line(current_line.rstrip()))
