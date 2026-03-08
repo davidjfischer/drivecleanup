@@ -516,6 +516,8 @@ class FileAnalyzer:
         self.folder_id_to_name = {}
         # Track folder IDs to their parent IDs for path traversal
         self.folder_id_to_parents = {}
+        # Flag to track if we've done a Drive-wide duplicate scan
+        self.duplicate_scan_done = False
 
     def __del__(self):
         """Cleanup when analyzer is destroyed."""
@@ -716,7 +718,8 @@ class FileAnalyzer:
                                 self.stats['total_size'] += int(item['size'])
 
                             # Track files by MD5 for duplicate detection (if available)
-                            if 'md5Checksum' in item:
+                            # Only if we haven't done a Drive-wide duplicate scan yet
+                            if not self.duplicate_scan_done and 'md5Checksum' in item:
                                 self.md5_to_files[item['md5Checksum']].append(item)
 
                         if scanned_count >= max_files:
@@ -782,7 +785,8 @@ class FileAnalyzer:
                             self.stats['total_size'] += int(item['size'])
 
                         # Track files by MD5 for duplicate detection (if available)
-                        if 'md5Checksum' in item:
+                        # Only if we haven't done a Drive-wide duplicate scan yet
+                        if not self.duplicate_scan_done and 'md5Checksum' in item:
                             self.md5_to_files[item['md5Checksum']].append(item)
 
                     if scanned >= max_files:
@@ -830,6 +834,8 @@ class FileAnalyzer:
                 if total_files == 0:
                     logger.warning("Cache is empty, will rescan entire Drive")
                 else:
+                    # Mark that we've loaded duplicate data
+                    self.duplicate_scan_done = True
                     return  # Cache loaded successfully with data
             except Exception as e:
                 logger.warning(f"Failed to load cache, will rescan: {e}")
@@ -927,6 +933,9 @@ class FileAnalyzer:
             logger.info("MD5 checksum and folder structure cache saved successfully")
         except Exception as e:
             logger.warning(f"Failed to save checksum cache: {e}")
+
+        # Mark that we've done a Drive-wide duplicate scan
+        self.duplicate_scan_done = True
 
     def get_file_path(self, file_item):
         """Build the full path to a file from its parent folders."""
