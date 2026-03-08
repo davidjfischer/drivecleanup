@@ -1532,7 +1532,7 @@ def parse_cleanup_report(report_file):
 
     return entries
 
-def format_box_line(text, width=BOX_WIDTH):
+def format_box_line(text, width=BOX_WIDTH, color_code=None):
     """Format a line for the dialog box with exact width."""
     # Account for "║ " and " ║" (4 characters total)
     max_text_width = width - 2
@@ -1540,11 +1540,21 @@ def format_box_line(text, width=BOX_WIDTH):
     if len(text) > max_text_width:
         text = text[:max_text_width]
     # Pad with spaces to exact width
-    return "║ " + text + " " * (max_text_width - len(text)) + " ║"
+    line = "║ " + text + " " * (max_text_width - len(text)) + " ║"
 
-def format_box_separator(char="─", width=BOX_WIDTH):
+    if color_code:
+        reset = '\033[0m'
+        return f"{color_code}{line}{reset}"
+    return line
+
+def format_box_separator(char="─", width=BOX_WIDTH, color_code=None):
     """Format a separator line for the dialog box."""
-    return "╠" + char * width + "╣"
+    line = "╠" + char * width + "╣"
+
+    if color_code:
+        reset = '\033[0m'
+        return f"{color_code}{line}{reset}"
+    return line
 
 def get_display_width(text):
     """
@@ -1677,33 +1687,37 @@ def interactive_cleanup(service, report_file, folder_id):
         logger.info("=" * 80)
 
         # Print beautiful dialog box (NOT logged, only to stdout)
+        # Use red color for all boxes
+        RED = '\033[91m'
+        RESET = '\033[0m'
+
         print("\n")
-        print("╔" + "═" * 78 + "╗")
-        print(format_box_line(f"File {i + 1}/{len(entries)} - {entry['confidence']} CONFIDENCE"))
-        print(format_box_separator("═"))
+        print(f"{RED}╔" + "═" * 78 + "╗" + RESET)
+        print(format_box_line(f"File {i + 1}/{len(entries)} - {entry['confidence']} CONFIDENCE", color_code=RED))
+        print(format_box_separator("═", color_code=RED))
 
         # For duplicates, show full path instead of just name
         if entry.get('path'):
             # Show full path for duplicates
             path = entry['path']
             if len(path) <= 68:
-                print(format_box_line(f"Path: {path}"))
+                print(format_box_line(f"Path: {path}", color_code=RED))
             else:
                 # Wrap long paths
-                print(format_box_line(f"Path: {path[:68]}"))
+                print(format_box_line(f"Path: {path[:68]}", color_code=RED))
                 remaining = path[68:]
                 while remaining:
-                    print(format_box_line(f"      {remaining[:68]}"))
+                    print(format_box_line(f"      {remaining[:68]}", color_code=RED))
                     remaining = remaining[68:]
         else:
             # Show just name for non-duplicates
-            print(format_box_line(f"Name: {entry['name'][:68]}"))
+            print(format_box_line(f"Name: {entry['name'][:68]}", color_code=RED))
 
-        print(format_box_line(f"Size: {entry['size']}"))
-        print(format_box_separator("─"))
+        print(format_box_line(f"Size: {entry['size']}", color_code=RED))
+        print(format_box_separator("─", color_code=RED))
 
         # Print reasons
-        print(format_box_line("Reasons:"))
+        print(format_box_line("Reasons:", color_code=RED))
         for reason in entry['reasons']:
             # Wrap long reasons
             reason_lines = []
@@ -1724,17 +1738,17 @@ def interactive_cleanup(service, report_file, folder_id):
                     reason_lines.append(current_line.rstrip())
 
             for line in reason_lines:
-                print(format_box_line(line))
+                print(format_box_line(line, color_code=RED))
 
         # Print summary if available
         if entry['summary']:
-            print(format_box_separator("─"))
-            print(format_box_line("Content Summary:"))
+            print(format_box_separator("─", color_code=RED))
+            print(format_box_line("Content Summary:", color_code=RED))
             summary_lines = entry['summary'].split('\n')
             for line in summary_lines:
                 # Wrap long lines
                 if len(line) <= BOX_CONTENT_MAX_WIDTH:
-                    print(format_box_line(f"  {line}"))
+                    print(format_box_line(f"  {line}", color_code=RED))
                 else:
                     # Word wrap
                     words = line.split()
@@ -1743,16 +1757,16 @@ def interactive_cleanup(service, report_file, folder_id):
                         if len(current_line + word + " ") <= BOX_MAX_TEXT_WIDTH:
                             current_line += word + " "
                         else:
-                            print(format_box_line(current_line.rstrip()))
+                            print(format_box_line(current_line.rstrip(), color_code=RED))
                             current_line = "  " + word + " "
                     if current_line.strip():
-                        print(format_box_line(current_line.rstrip()))
+                        print(format_box_line(current_line.rstrip(), color_code=RED))
 
         # Print options
-        print(format_box_separator("═"))
-        print(format_box_line("Choose action:"))
-        print(format_box_line("  (1) Delete  │  (2) Open in Browser  │  (3) Skip  │  (q) Quit"))
-        print("╚" + "═" * 78 + "╝")
+        print(format_box_separator("═", color_code=RED))
+        print(format_box_line("Choose action:", color_code=RED))
+        print(format_box_line("  (1) Delete  │  (2) Open in Browser  │  (3) Skip  │  (q) Quit", color_code=RED))
+        print(f"{RED}╚" + "═" * 78 + "╝" + RESET)
         print("Your choice: ", end='', flush=True)
 
         choice = get_single_key().lower()
