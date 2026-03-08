@@ -971,37 +971,64 @@ class FileAnalyzer:
                     # None of these duplicates are in our folder, skip
                     continue
 
-                # Keep the oldest file (first by modified time) as original, mark others as duplicates
-                # Sort by modified time to keep oldest
-                sorted_files = sorted(files_with_hash, key=lambda f: f.get('modifiedTime', ''), reverse=False)
-                original_file = sorted_files[0]
-                original_path = self.get_file_path(original_file)
+                # NEW LOGIC: Mark ALL files in scanned folder as duplicates
+                # Find a file OUTSIDE the scanned folder to use as "original" reference
+                files_outside_folder = [f for f in files_with_hash if f['id'] not in scanned_file_ids]
 
-                # Mark duplicates that are in our scanned folder
-                for duplicate_file in sorted_files[1:]:
-                    if duplicate_file['id'] not in scanned_file_ids:
-                        # This duplicate is not in our folder, skip it
-                        continue
+                if files_outside_folder:
+                    # Use oldest file outside scanned folder as reference
+                    sorted_outside = sorted(files_outside_folder, key=lambda f: f.get('modifiedTime', ''), reverse=False)
+                    original_file = sorted_outside[0]
+                    original_path = self.get_file_path(original_file)
 
-                    duplicates_found += 1
-                    duplicate_path = self.get_file_path(duplicate_file)
-                    candidate = {
-                        'id': duplicate_file['id'],
-                        'name': duplicate_file['name'],
-                        'path': duplicate_path,  # Store full path for duplicates
-                        'size': int(duplicate_file.get('size', 0)) if 'size' in duplicate_file else 0,
-                        'modified': duplicate_file.get('modifiedTime'),
-                        'viewed': duplicate_file.get('viewedByMeTime'),
-                        'reasons': [f"Duplicate file - original at: {original_path}"],
-                        'link': duplicate_file.get('webViewLink', 'N/A'),
-                        'age_days': 0,
-                        'mime_type': duplicate_file.get('mimeType', 'Unknown'),
-                        'summary': None
-                    }
+                    # Mark ALL files in scanned folder as duplicates
+                    for duplicate_file in duplicates_in_folder:
+                        duplicates_found += 1
+                        duplicate_path = self.get_file_path(duplicate_file)
+                        candidate = {
+                            'id': duplicate_file['id'],
+                            'name': duplicate_file['name'],
+                            'path': duplicate_path,
+                            'size': int(duplicate_file.get('size', 0)) if 'size' in duplicate_file else 0,
+                            'modified': duplicate_file.get('modifiedTime'),
+                            'viewed': duplicate_file.get('viewedByMeTime'),
+                            'reasons': [f"Duplicate file - original at: {original_path}"],
+                            'link': duplicate_file.get('webViewLink', 'N/A'),
+                            'age_days': 0,
+                            'mime_type': duplicate_file.get('mimeType', 'Unknown'),
+                            'summary': None
+                        }
 
-                    self.delete_candidates['HIGH'].append(candidate)
-                    if 'size' in duplicate_file:
-                        self.stats['potential_savings'] += int(duplicate_file['size'])
+                        self.delete_candidates['HIGH'].append(candidate)
+                        if 'size' in duplicate_file:
+                            self.stats['potential_savings'] += int(duplicate_file['size'])
+                else:
+                    # All duplicates are in scanned folder - keep oldest, mark rest as duplicates
+                    sorted_in_folder = sorted(duplicates_in_folder, key=lambda f: f.get('modifiedTime', ''), reverse=False)
+                    original_file = sorted_in_folder[0]
+                    original_path = self.get_file_path(original_file)
+
+                    # Mark all except the oldest as duplicates
+                    for duplicate_file in sorted_in_folder[1:]:
+                        duplicates_found += 1
+                        duplicate_path = self.get_file_path(duplicate_file)
+                        candidate = {
+                            'id': duplicate_file['id'],
+                            'name': duplicate_file['name'],
+                            'path': duplicate_path,
+                            'size': int(duplicate_file.get('size', 0)) if 'size' in duplicate_file else 0,
+                            'modified': duplicate_file.get('modifiedTime'),
+                            'viewed': duplicate_file.get('viewedByMeTime'),
+                            'reasons': [f"Duplicate file (in same folder) - keep oldest at: {original_path}"],
+                            'link': duplicate_file.get('webViewLink', 'N/A'),
+                            'age_days': 0,
+                            'mime_type': duplicate_file.get('mimeType', 'Unknown'),
+                            'summary': None
+                        }
+
+                        self.delete_candidates['HIGH'].append(candidate)
+                        if 'size' in duplicate_file:
+                            self.stats['potential_savings'] += int(duplicate_file['size'])
 
         self.stats['duplicates_found'] = duplicates_found
         if duplicates_found > 0:
