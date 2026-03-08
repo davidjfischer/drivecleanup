@@ -469,10 +469,11 @@ Assessment: [KEEP/DELETE] - [reasoning]"""
 # ============================================================================
 
 class FileAnalyzer:
-    def __init__(self, service, analyze_content=False, use_claude=False, aws_profile='dev', aws_region='us-east-1'):
+    def __init__(self, service, analyze_content=False, use_claude=False, aws_profile='dev', aws_region='us-east-1', min_age_days=90):
         self.service = service
         self.analyze_content = analyze_content
         self.use_claude = use_claude
+        self.min_age_days = min_age_days
         self.content_extractor = ContentExtractor(service) if analyze_content else None
         self.bedrock_client = None
 
@@ -546,18 +547,24 @@ class FileAnalyzer:
         modified = datetime.fromisoformat(modified_time.replace('Z', '+00:00'))
         age_days = (now - modified).days
 
-        if age_days > VERY_OLD_DAYS:
-            reasons.append(f"Very old: {age_days} days ({age_days//365} years) since modification")
-        elif age_days > OLD_DAYS:
-            reasons.append(f"Old: {age_days} days ({age_days//365} year) since modification")
-        elif age_days > SOMEWHAT_OLD_DAYS:
-            reasons.append(f"Somewhat old: {age_days} days ({age_days//30} months) since modification")
+        # Check against user-configured minimum age threshold
+        if age_days > self.min_age_days:
+            # Categorize by severity
+            if age_days > VERY_OLD_DAYS:
+                reasons.append(f"Very old: {age_days} days ({age_days//365} years) since modification")
+            elif age_days > OLD_DAYS:
+                reasons.append(f"Old: {age_days} days ({age_days//365} year) since modification")
+            elif age_days > SOMEWHAT_OLD_DAYS:
+                reasons.append(f"Somewhat old: {age_days} days ({age_days//30} months) since modification")
+            else:
+                # Between min_age_days and SOMEWHAT_OLD_DAYS
+                reasons.append(f"Not recently modified: {age_days} days ({age_days//30} months) since modification")
 
         # Check view time if available
         if viewed_time:
             viewed = datetime.fromisoformat(viewed_time.replace('Z', '+00:00'))
             view_age_days = (now - viewed).days
-            if view_age_days > OLD_DAYS:
+            if view_age_days > max(OLD_DAYS, self.min_age_days):
                 reasons.append(f"Not viewed in {view_age_days} days ({view_age_days//365} years)")
 
         return reasons, age_days
@@ -618,6 +625,9 @@ class FileAnalyzer:
         if age_days > OLD_DAYS:
             score += 1
         if size > VERY_LARGE_FILE_SIZE and age_days > SOMEWHAT_OLD_DAYS:
+            score += 1
+        # If file meets minimum age threshold but hasn't scored yet, give it LOW confidence
+        if age_days > self.min_age_days and score == 0:
             score += 1
 
         # Classify
@@ -1670,6 +1680,9 @@ Examples:
   # Use different AWS profile and region
   python analyze_drive_cleanup.py 1tW34LrY4e1e3OIMJkBljP0JS5atcYXJh --aws-profile prod --aws-region eu-central-1
 
+  # Set minimum age threshold to 30 days
+  python analyze_drive_cleanup.py 1tW34LrY4e1e3OIMJkBljP0JS5atcYXJh --analyze --min-age-days 30
+
   # Analyze entire Drive (no folder parameter)
   python analyze_drive_cleanup.py --analyze
         '''
@@ -1719,6 +1732,13 @@ Examples:
         type=str,
         default='us-east-1',
         help='AWS region for Bedrock (default: us-east-1)'
+    )
+
+    parser.add_argument(
+        '--min-age-days',
+        type=int,
+        default=90,
+        help='Minimum age in days for files to be considered for deletion (default: 90)'
     )
 
     args = parser.parse_args()
@@ -1800,8 +1820,10 @@ Examples:
             analyze_content=True,  # Always analyze content
             use_claude=use_claude,
             aws_profile=args.aws_profile,
-            aws_region=args.aws_region
+            aws_region=args.aws_region,
+            min_age_days=args.min_age_days
         )
+        logger.info(f"Minimum age threshold: {args.min_age_days} days")
 
         # Scan drive (folder-specific or entire drive)
         if folder_id:

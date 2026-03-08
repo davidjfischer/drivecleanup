@@ -128,6 +128,25 @@ Customize with:
 --max-files 5000
 ```
 
+### Minimum Age Threshold
+
+Default: Files older than 90 days are considered for deletion
+
+Customize the minimum age threshold:
+```bash
+# Flag files older than 30 days
+--min-age-days 30
+
+# Flag files older than 180 days (6 months)
+--min-age-days 180
+```
+
+**How it works:**
+- Files younger than the threshold are never flagged for deletion
+- Files older than the threshold receive at least LOW confidence
+- Very old files (> 1 year) get higher confidence scores
+- Combine with other criteria (filename patterns, size) for better accuracy
+
 ## Logging
 
 The tool provides comprehensive logging:
