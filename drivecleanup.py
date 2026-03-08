@@ -83,8 +83,6 @@ MAX_TEXT_CHARS = 5000
 MAX_CLAUDE_CHARS = 15000
 
 # Content analysis limits
-MAX_FILES_WITH_CLAUDE = 50
-MAX_FILES_WITHOUT_CLAUDE = 100
 MAX_SUMMARY_WORDS = 50
 
 # Report display limits
@@ -787,6 +785,44 @@ class FileAnalyzer:
         logger.info(f"Scan complete: {self.stats['total_files']} files, {self.stats['total_folders']} folders")
         logger.info(f"Total size: {self.stats['total_size'] / (1024**3):.2f} GB")
 
+    def scan_drive_for_duplicates(self):
+        """Lightweight scan of entire Drive to populate MD5 checksums for duplicate detection."""
+        logger.info("Scanning entire Drive for duplicate detection...")
+
+        page_token = None
+        scanned = 0
+
+        while True:
+            try:
+                results = self.service.files().list(
+                    pageSize=1000,
+                    pageToken=page_token,
+                    fields="nextPageToken, files(id, name, mimeType, parents, md5Checksum)",
+                    q="trashed=false and mimeType != 'application/vnd.google-apps.folder'"
+                ).execute()
+
+                items = results.get('files', [])
+
+                for item in items:
+                    scanned += 1
+
+                    if scanned % 500 == 0:
+                        logger.info(f"  Scanned {scanned} files for duplicates...")
+
+                    # Track files by MD5 for duplicate detection (if available)
+                    if 'md5Checksum' in item:
+                        self.md5_to_files[item['md5Checksum']].append(item)
+
+                page_token = results.get('nextPageToken')
+                if not page_token:
+                    break
+
+            except Exception as e:
+                logger.error(f"Error scanning drive for duplicates: {e}")
+                break
+
+        logger.info(f"Duplicate scan complete: scanned {scanned} files across entire Drive")
+
     def get_file_path(self, file_item):
         """Build the full path to a file from its parent folders."""
         path_parts = [file_item['name']]
@@ -935,12 +971,9 @@ class FileAnalyzer:
         logger.info(f"Found {len(extractable)} candidates with extractable content")
         logger.info(f"Analyzing content (this may take a while)...")
 
-        # Limit files based on whether we're using Claude (more expensive) or not
-        max_files = MAX_FILES_WITH_CLAUDE if self.use_claude else MAX_FILES_WITHOUT_CLAUDE
-
-        for i, candidate in enumerate(extractable[:max_files]):
+        for i, candidate in enumerate(extractable):
             if (i + 1) % 10 == 0:
-                logger.info(f"  Extracted content from {i + 1}/{min(len(extractable), max_files)} files...")
+                logger.info(f"  Extracted content from {i + 1}/{len(extractable)} files...")
 
             try:
                 text = self.content_extractor.extract_text(
@@ -1840,6 +1873,9 @@ Examples:
 
         # Scan drive (folder-specific or entire drive)
         if folder_id:
+            # For folder scans, first scan entire Drive for duplicate detection
+            analyzer.scan_drive_for_duplicates()
+            # Then scan the specific folder in detail
             analyzer.scan_folder(folder_id, max_files=args.max_files)
         else:
             analyzer.scan_drive(max_files=args.max_files)
