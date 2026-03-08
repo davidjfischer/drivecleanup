@@ -1302,7 +1302,10 @@ def parse_cleanup_report(report_file):
         # Parse individual entries
         entry_pattern = r'\[(\d+)\] (.+?)\n    Size: (.+?)\n    Link: (.+?)\n    Reasons:\n((?:      - .+\n)+)'
 
-        for match in re.finditer(entry_pattern, section_content):
+        # Convert to list to find boundaries between entries
+        matches = list(re.finditer(entry_pattern, section_content))
+
+        for idx, match in enumerate(matches):
             index, name, size, link, reasons_block = match.groups()
 
             reasons = [r.strip('- ').strip() for r in reasons_block.strip().split('\n')]
@@ -1310,9 +1313,19 @@ def parse_cleanup_report(report_file):
             # Extract file ID from link
             file_id = extract_file_id_from_link(link)
 
-            # Check if there's a content summary
+            # Check if there's a content summary between this match and the next entry
+            # Limit search to avoid picking up summaries from other files
+            search_start = match.end()
+            if idx + 1 < len(matches):
+                # Search only until the next entry starts
+                search_end = matches[idx + 1].start()
+                search_text = section_content[search_start:search_end]
+            else:
+                # Last entry, search until end of section
+                search_text = section_content[search_start:]
+
             summary_pattern = r'    Content Summary:\n      (.+?)(?:\n\n|\n\[|$)'
-            summary_match = re.search(summary_pattern, section_content[match.end():])
+            summary_match = re.search(summary_pattern, search_text)
             summary = summary_match.group(1) if summary_match else None
 
             entry = {
