@@ -470,11 +470,12 @@ Assessment: [KEEP/DELETE] - [reasoning]"""
 # ============================================================================
 
 class FileAnalyzer:
-    def __init__(self, service, analyze_content=False, use_claude=False, aws_profile='dev', aws_region='us-east-1', min_age_days=90):
+    def __init__(self, service, analyze_content=False, use_claude=False, aws_profile='dev', aws_region='us-east-1', min_age_days=90, skipped_files=None):
         self.service = service
         self.analyze_content = analyze_content
         self.use_claude = use_claude
         self.min_age_days = min_age_days
+        self.skipped_files = skipped_files or set()
         self.content_extractor = ContentExtractor(service) if analyze_content else None
         self.bedrock_client = None
 
@@ -1006,12 +1007,37 @@ class FileAnalyzer:
 
         extractable = [c for c in all_candidates if c['mime_type'] in extractable_mimes or c['mime_type'].startswith('text/')]
 
-        logger.info(f"Found {len(extractable)} candidates with extractable content")
-        logger.info(f"Analyzing content (this may take a while)...")
+        # Filter out duplicates and skipped files
+        filtered_extractable = []
+        skipped_count = 0
+        duplicate_count = 0
 
-        for i, candidate in enumerate(extractable):
+        for candidate in extractable:
+            # Skip if this is a duplicate file
+            is_duplicate = any('Duplicate file' in reason for reason in candidate.get('reasons', []))
+            if is_duplicate:
+                duplicate_count += 1
+                continue
+
+            # Skip if this file was already skipped in a previous run
+            if candidate['id'] in self.skipped_files:
+                skipped_count += 1
+                continue
+
+            filtered_extractable.append(candidate)
+
+        if duplicate_count > 0:
+            logger.info(f"Skipping content analysis for {duplicate_count} duplicate files")
+        if skipped_count > 0:
+            logger.info(f"Skipping content analysis for {skipped_count} previously skipped files")
+
+        logger.info(f"Found {len(filtered_extractable)} candidates requiring content analysis")
+        if len(filtered_extractable) > 0:
+            logger.info(f"Analyzing content (this may take a while)...")
+
+        for i, candidate in enumerate(filtered_extractable):
             if (i + 1) % 10 == 0:
-                logger.info(f"  Extracted content from {i + 1}/{len(extractable)} files...")
+                logger.info(f"  Extracted content from {i + 1}/{len(filtered_extractable)} files...")
 
             try:
                 text = self.content_extractor.extract_text(
@@ -1904,6 +1930,11 @@ Examples:
         if not HAS_EXCEL:
             logger.warning("openpyxl not installed - Excel analysis will be skipped")
 
+        # Load previously skipped files to avoid re-analyzing them
+        _, skipped_files = load_processed_files(folder_id)
+        if skipped_files:
+            logger.info(f"Loaded {len(skipped_files)} previously skipped files - will skip content analysis for these")
+
         # Create analyzer
         analyzer = FileAnalyzer(
             service,
@@ -1911,7 +1942,8 @@ Examples:
             use_claude=use_claude,
             aws_profile=args.aws_profile,
             aws_region=args.aws_region,
-            min_age_days=args.min_age_days
+            min_age_days=args.min_age_days,
+            skipped_files=skipped_files
         )
         logger.info(f"Minimum age threshold: {args.min_age_days} days")
 
