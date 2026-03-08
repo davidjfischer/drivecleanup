@@ -1289,76 +1289,42 @@ class FileAnalyzer:
             logger.info(f"Found {len(folders_with_only_empty_subfolders)} folders containing only empty subfolders")
 
     def generate_report(self):
-        """Generate a detailed report of deletion candidates."""
-        report_lines = []
-        report_lines.append("=" * 80)
-        report_lines.append("GOOGLE DRIVE CLEANUP ANALYSIS REPORT")
-        report_lines.append("=" * 80)
-        report_lines.append("")
-
-        # Summary
-        report_lines.append("SUMMARY")
-        report_lines.append("-" * 80)
-        report_lines.append(f"Total files scanned: {self.stats['total_files']}")
-        report_lines.append(f"Total folders scanned: {self.stats['total_folders']}")
-        report_lines.append(f"Total size: {self.stats['total_size'] / (1024**3):.2f} GB")
-        if self.stats['duplicates_found'] > 0:
-            report_lines.append(f"Duplicate files found: {self.stats['duplicates_found']}")
-        if self.analyze_content:
-            report_lines.append(f"Files with content analyzed: {self.stats['content_analyzed']}")
-        report_lines.append("")
-        report_lines.append(f"Delete candidates found:")
-        report_lines.append(f"  HIGH confidence:   {len([c for c in self.delete_candidates['HIGH'] if 'id' in c])} items (including {self.stats['duplicates_found']} duplicates)")
-        report_lines.append(f"  MEDIUM confidence: {len([c for c in self.delete_candidates['MEDIUM'] if 'id' in c])} items")
-        report_lines.append(f"  LOW confidence:    {len([c for c in self.delete_candidates['LOW'] if 'id' in c])} items")
-        report_lines.append("")
-        report_lines.append(f"Potential space savings: {self.stats['potential_savings'] / (1024**3):.2f} GB")
-        report_lines.append("")
-
-        # Detailed candidates
+        """Generate a detailed JSON report of deletion candidates."""
+        # Prepare candidates by confidence level
+        candidates_by_confidence = {}
         for confidence in ['HIGH', 'MEDIUM', 'LOW']:
             candidates = self.delete_candidates[confidence]
-            if not candidates:
-                continue
+            if candidates:
+                # Sort by size (largest first)
+                sorted_candidates = sorted(candidates, key=lambda x: x.get('size', 0), reverse=True)
+                # Limit to MAX_CANDIDATES_IN_REPORT
+                candidates_by_confidence[confidence] = sorted_candidates[:MAX_CANDIDATES_IN_REPORT]
+                if len(sorted_candidates) > MAX_CANDIDATES_IN_REPORT:
+                    candidates_by_confidence[f"{confidence}_total"] = len(sorted_candidates)
 
-            report_lines.append("")
-            report_lines.append("=" * 80)
-            report_lines.append(f"{confidence} CONFIDENCE DELETE CANDIDATES")
-            report_lines.append("=" * 80)
+        # Build JSON report structure
+        report_data = {
+            "report_type": "Google Drive Cleanup Analysis",
+            "generated_at": datetime.now(timezone.utc).isoformat(),
+            "summary": {
+                "total_files_scanned": self.stats['total_files'],
+                "total_folders_scanned": self.stats['total_folders'],
+                "total_size_bytes": self.stats['total_size'],
+                "total_size_gb": round(self.stats['total_size'] / (1024**3), 2),
+                "duplicates_found": self.stats['duplicates_found'],
+                "content_analyzed": self.stats['content_analyzed'] if self.analyze_content else 0,
+                "delete_candidates": {
+                    "HIGH": len([c for c in self.delete_candidates['HIGH'] if 'id' in c]),
+                    "MEDIUM": len([c for c in self.delete_candidates['MEDIUM'] if 'id' in c]),
+                    "LOW": len([c for c in self.delete_candidates['LOW'] if 'id' in c])
+                },
+                "potential_savings_bytes": self.stats['potential_savings'],
+                "potential_savings_gb": round(self.stats['potential_savings'] / (1024**3), 2)
+            },
+            "candidates": candidates_by_confidence
+        }
 
-            # Sort by size (largest first)
-            sorted_candidates = sorted(candidates, key=lambda x: x.get('size', 0), reverse=True)
-
-            for i, candidate in enumerate(sorted_candidates[:MAX_CANDIDATES_IN_REPORT], 1):
-                size = candidate.get('size', 0)
-                size_str = f"{size / (1024**2):.2f} MB" if size > 1024*1024 else f"{size / 1024:.2f} KB"
-
-                report_lines.append("")
-                report_lines.append(f"[{i}] {candidate['name']}")
-                # Add path if available (for duplicates)
-                if candidate.get('path'):
-                    report_lines.append(f"    Path: {candidate['path']}")
-                report_lines.append(f"    Size: {size_str}")
-                report_lines.append(f"    Link: {candidate['link']}")
-                report_lines.append(f"    Reasons:")
-                for reason in candidate['reasons']:
-                    report_lines.append(f"      - {reason}")
-
-                # Add content summary if available
-                if candidate.get('summary'):
-                    report_lines.append(f"    Content Summary:")
-                    report_lines.append(f"      {candidate['summary']}")
-
-            if len(sorted_candidates) > MAX_CANDIDATES_IN_REPORT:
-                report_lines.append("")
-                report_lines.append(f"... and {len(sorted_candidates) - MAX_CANDIDATES_IN_REPORT} more items")
-
-        report_lines.append("")
-        report_lines.append("=" * 80)
-        report_lines.append("END OF REPORT")
-        report_lines.append("=" * 80)
-
-        return "\n".join(report_lines)
+        return json.dumps(report_data, indent=2, ensure_ascii=False)
 
 # ============================================================================
 # HELPER FUNCTIONS
@@ -1403,7 +1369,7 @@ def find_latest_report(folder_id):
     logger.debug(f"Searching for reports in {REPORTS_DIR} directory")
 
     # Pattern for report files
-    pattern = os.path.join(REPORTS_DIR, f"drive_cleanup_report_{folder_id}_*.txt")
+    pattern = os.path.join(REPORTS_DIR, f"drive_cleanup_report_{folder_id}_*.json")
     reports = glob.glob(pattern)
 
     logger.debug(f"Found {len(reports)} report(s) matching pattern")
@@ -1500,67 +1466,47 @@ def load_processed_files(folder_id):
     return deleted_files, skipped_files
 
 def parse_cleanup_report(report_file):
-    """Parse cleanup report and extract file information."""
+    """Parse JSON cleanup report and extract file information."""
     if not os.path.exists(report_file):
         logger.error(f"Report file not found: {report_file}")
         return []
 
-    with open(report_file, 'r', encoding='utf-8') as f:
-        content = f.read()
+    try:
+        with open(report_file, 'r', encoding='utf-8') as f:
+            report_data = json.load(f)
+    except json.JSONDecodeError as e:
+        logger.error(f"Failed to parse JSON report: {e}")
+        return []
 
-    # Parse entries
+    # Extract entries from all confidence levels
     entries = []
-    current_entry = None
+    candidates = report_data.get('candidates', {})
 
-    # Split by confidence sections
-    sections = re.split(r'={80}\n([A-Z]+) CONFIDENCE DELETE CANDIDATES\n={80}', content)
+    for confidence in ['HIGH', 'MEDIUM', 'LOW']:
+        if confidence in candidates:
+            for candidate in candidates[confidence]:
+                # Format size for display (similar to old format)
+                size = candidate.get('size', 0)
+                if size > 1024*1024:
+                    size_str = f"{size / (1024**2):.2f} MB"
+                else:
+                    size_str = f"{size / 1024:.2f} KB"
 
-    for i in range(1, len(sections), 2):
-        confidence = sections[i]
-        section_content = sections[i + 1]
+                # Extract file ID from link
+                file_id = extract_file_id_from_link(candidate.get('link', ''))
 
-        # Parse individual entries
-        # Pattern with optional Path field
-        entry_pattern = r'\[(\d+)\] (.+?)\n(?:    Path: (.+?)\n)?    Size: (.+?)\n    Link: (.+?)\n    Reasons:\n((?:      - .+\n)+)'
-
-        # Convert to list to find boundaries between entries
-        matches = list(re.finditer(entry_pattern, section_content))
-
-        for idx, match in enumerate(matches):
-            index, name, path, size, link, reasons_block = match.groups()
-
-            reasons = [r.strip('- ').strip() for r in reasons_block.strip().split('\n')]
-
-            # Extract file ID from link
-            file_id = extract_file_id_from_link(link)
-
-            # Check if there's a content summary between this match and the next entry
-            # Limit search to avoid picking up summaries from other files
-            search_start = match.end()
-            if idx + 1 < len(matches):
-                # Search only until the next entry starts
-                search_end = matches[idx + 1].start()
-                search_text = section_content[search_start:search_end]
-            else:
-                # Last entry, search until end of section
-                search_text = section_content[search_start:]
-
-            summary_pattern = r'    Content Summary:\n      (.+?)(?:\n\n|\n\[|$)'
-            summary_match = re.search(summary_pattern, search_text)
-            summary = summary_match.group(1) if summary_match else None
-
-            entry = {
-                'index': int(index),
-                'name': name,
-                'path': path,  # May be None if not present
-                'size': size,
-                'link': link,
-                'file_id': file_id,
-                'confidence': confidence,
-                'reasons': reasons,
-                'summary': summary
-            }
-            entries.append(entry)
+                entry = {
+                    'index': len(entries) + 1,  # Sequential index
+                    'name': candidate.get('name', 'Unknown'),
+                    'path': candidate.get('path'),  # May be None
+                    'size': size_str,
+                    'link': candidate.get('link', 'N/A'),
+                    'file_id': file_id,
+                    'confidence': confidence,
+                    'reasons': candidate.get('reasons', []),
+                    'summary': candidate.get('summary')
+                }
+                entries.append(entry)
 
     return entries
 
@@ -2156,7 +2102,7 @@ Examples:
 
         # Save report
         folder_suffix = f"_{folder_id}" if folder_id else "_full_drive"
-        report_filename = os.path.join(REPORTS_DIR, f"drive_cleanup_report{folder_suffix}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.txt")
+        report_filename = os.path.join(REPORTS_DIR, f"drive_cleanup_report{folder_suffix}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json")
 
         logger.debug(f"Writing report to {report_filename}")
         with open(report_filename, 'w', encoding='utf-8') as f:
@@ -2183,7 +2129,7 @@ Examples:
 
         if not report_file:
             logger.error(f"No cleanup report found for folder {folder_id}")
-            logger.error(f"Expected file pattern: drive_cleanup_report_{folder_id}_*.txt")
+            logger.error(f"Expected file pattern: drive_cleanup_report_{folder_id}_*.json")
             logger.error("Please run analysis first (without --clean flag)")
             sys.exit(1)
 

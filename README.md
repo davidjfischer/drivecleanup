@@ -94,7 +94,7 @@ The tool organizes generated files into subdirectories:
 - `{FOLDER_ID}_skipped_files.txt` - Log of all skipped files
 
 ### `reports/` - Analysis reports
-- `drive_cleanup_report_{FOLDER_ID}_{TIMESTAMP}.txt` - Detailed analysis report with deletion candidates
+- `drive_cleanup_report_{FOLDER_ID}_{TIMESTAMP}.json` - JSON analysis report with deletion candidates
 
 ### `logs/` - Session logs
 - `{FOLDER_ID}_session_{TIMESTAMP}.log` - Complete session log with DEBUG-level information
