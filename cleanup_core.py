@@ -461,8 +461,8 @@ def interactive_cleanup(service, report_file, folder_id):
         # Print options
         print(format_box_separator("═", color_code=RED))
         print(format_box_line("Choose action:", color_code=RED))
-        print(format_box_line("  (1) Delete  │  (2) Browser  │  (3) Skip  │  (4) Next", color_code=RED))
-        print(format_box_line("  (5) Delete all  │  (6) Skip all  │  (q) Quit", color_code=RED))
+        print(format_box_line("  (1) Delete  |  (2) Browser  |  (3) Skip  |  (4) Next", color_code=RED))
+        print(format_box_line("  (5) Delete all  |  (6) Skip all  |  (q) Quit", color_code=RED))
         print(f"{RED}╚" + "═" * 78 + "╝" + RESET)
         print("Your choice: ", end='', flush=True)
 

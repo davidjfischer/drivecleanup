@@ -416,32 +416,44 @@ class ContentExtractor:
 
     @staticmethod
     def create_claude_summary(text, file_name, bedrock_client):
-        """Create an intelligent summary using Claude via AWS Bedrock."""
+        """Create an intelligent summary using Claude via AWS Bedrock.
+
+        Returns:
+            dict with keys: 'summary', 'assessment', 'confidence'
+            Or None if Claude analysis fails
+        """
         if not text or not bedrock_client:
-            return ContentExtractor.create_summary(text)
+            return None
 
         # Truncate text if too long (Claude has token limits)
         if len(text) > MAX_CLAUDE_CHARS:
             text = text[:MAX_CLAUDE_CHARS] + "... [truncated]"
 
-        prompt = f"""Analyze this file content and provide:
-1. A brief summary (2-3 sentences) of what this file contains
-2. An assessment of whether this file seems important or can likely be deleted
+        prompt = f"""Analyze this file content and provide a structured assessment for cleanup decisions.
 
 File name: {file_name}
 
 Content:
 {text}
 
-Please respond in this format:
-Summary: [your summary]
-Assessment: [KEEP/DELETE] - [reasoning]"""
+Please respond in this EXACT format:
+Summary: [2-3 sentence summary of what this file contains]
+Assessment: [KEEP/DELETE]
+Confidence: [HIGH/MEDIUM/LOW]
+Reasoning: [brief explanation of your assessment]
+
+Guidelines:
+- DELETE if: temporary, outdated, backup, test file, obsolete content
+- KEEP if: important documents, active projects, valuable data
+- HIGH confidence: clearly obsolete or clearly important
+- MEDIUM confidence: likely can be deleted but review recommended
+- LOW confidence: uncertain, needs human judgment"""
 
         try:
             # Prepare request body for Bedrock
             request_body = {
                 "anthropic_version": "bedrock-2023-05-31",
-                "max_tokens": 300,
+                "max_tokens": 400,
                 "messages": [{
                     "role": "user",
                     "content": prompt
@@ -458,12 +470,37 @@ Assessment: [KEEP/DELETE] - [reasoning]"""
 
             # Parse response
             response_body = json.loads(response['body'].read())
-            return response_body['content'][0]['text'].strip()
+            full_text = response_body['content'][0]['text'].strip()
+
+            # Parse the structured response
+            result = {
+                'summary': None,
+                'assessment': None,
+                'confidence': None,
+                'reasoning': None
+            }
+
+            for line in full_text.split('\n'):
+                line = line.strip()
+                if line.startswith('Summary:'):
+                    result['summary'] = line.replace('Summary:', '').strip()
+                elif line.startswith('Assessment:'):
+                    result['assessment'] = line.replace('Assessment:', '').strip().upper()
+                elif line.startswith('Confidence:'):
+                    result['confidence'] = line.replace('Confidence:', '').strip().upper()
+                elif line.startswith('Reasoning:'):
+                    result['reasoning'] = line.replace('Reasoning:', '').strip()
+
+            # Validate we got the key fields
+            if result['summary'] and result['assessment']:
+                return result
+            else:
+                logger.debug(f"Incomplete Claude response: {full_text}")
+                return None
 
         except Exception as e:
             logger.debug(f"Error using Claude via Bedrock: {e}")
-            # Fallback to simple summary
-            return ContentExtractor.create_summary(text)
+            return None
 
 # ============================================================================
 # FILE ANALYSIS
@@ -940,16 +977,59 @@ class FileAnalyzer:
                 if text:
                     # Use Claude for intelligent summary if available
                     if self.use_claude and self.bedrock_client:
-                        summary = ContentExtractor.create_claude_summary(
+                        claude_result = ContentExtractor.create_claude_summary(
                             text,
                             candidate['name'],
                             self.bedrock_client
                         )
-                    else:
-                        summary = ContentExtractor.create_summary(text, max_words=MAX_SUMMARY_WORDS)
 
-                    candidate['summary'] = summary
-                    self.stats['content_analyzed'] += 1
+                        if claude_result:
+                            # Use Claude's summary
+                            candidate['summary'] = claude_result['summary']
+
+                            # Use Claude's confidence if available and assessment is DELETE
+                            if claude_result.get('assessment') == 'DELETE' and claude_result.get('confidence'):
+                                # Store Claude's reasoning
+                                if claude_result.get('reasoning'):
+                                    candidate['reasons'].append(f"Claude assessment: {claude_result['reasoning']}")
+
+                                # Adjust confidence based on Claude's assessment
+                                claude_confidence = claude_result['confidence']
+                                current_confidence = None
+
+                                # Find current confidence level
+                                for conf_level in ['HIGH', 'MEDIUM', 'LOW']:
+                                    if candidate in self.delete_candidates[conf_level]:
+                                        current_confidence = conf_level
+                                        break
+
+                                # Move to Claude's suggested confidence if different
+                                if current_confidence and claude_confidence in ['HIGH', 'MEDIUM', 'LOW']:
+                                    if current_confidence != claude_confidence:
+                                        logger.debug(f"Claude adjusted confidence for {candidate['name']}: {current_confidence} → {claude_confidence}")
+                                        self.delete_candidates[current_confidence].remove(candidate)
+                                        self.delete_candidates[claude_confidence].append(candidate)
+
+                            elif claude_result.get('assessment') == 'KEEP':
+                                # Claude says KEEP - remove from delete candidates
+                                logger.debug(f"Claude recommends KEEP for {candidate['name']}: {claude_result.get('reasoning')}")
+                                for conf_level in ['HIGH', 'MEDIUM', 'LOW']:
+                                    if candidate in self.delete_candidates[conf_level]:
+                                        self.delete_candidates[conf_level].remove(candidate)
+                                        logger.info(f"  Removed {candidate['name']} from candidates (Claude: KEEP)")
+                                        break
+
+                            self.stats['content_analyzed'] += 1
+                        else:
+                            # Claude failed, use fallback
+                            summary = ContentExtractor.create_summary(text, max_words=MAX_SUMMARY_WORDS)
+                            candidate['summary'] = summary
+                            self.stats['content_analyzed'] += 1
+                    else:
+                        # No Claude, use simple summary
+                        summary = ContentExtractor.create_summary(text, max_words=MAX_SUMMARY_WORDS)
+                        candidate['summary'] = summary
+                        self.stats['content_analyzed'] += 1
             except Exception as e:
                 logger.debug(f"Error analyzing content for {candidate['name']}: {e}")
 
@@ -1288,11 +1368,21 @@ def format_box_line(text, width=BOX_WIDTH, color_code=None):
     """Format a line for the dialog box with exact width."""
     # Account for "║ " and " ║" (4 characters total)
     max_text_width = width - 2
-    # Ensure text doesn't exceed max width
-    if len(text) > max_text_width:
+
+    # Calculate visible length (accounting for color codes)
+    # Remove ANSI color codes for length calculation
+    import re
+    visible_text = re.sub(r'\x1b\[[0-9;]+m', '', text)
+
+    # Ensure text doesn't exceed max width (truncate if needed)
+    if len(visible_text) > max_text_width:
+        # Truncate to fit
         text = text[:max_text_width]
-    # Pad with spaces to exact width
-    line = "║ " + text + " " * (max_text_width - len(text)) + " ║"
+        visible_text = visible_text[:max_text_width]
+
+    # Pad with spaces to exact width based on visible length
+    padding = max_text_width - len(visible_text)
+    line = "║ " + text + " " * padding + " ║"
 
     if color_code:
         reset = '\033[0m'
@@ -1517,7 +1607,7 @@ def interactive_cleanup(service, report_file, folder_id):
         # Print options
         print(format_box_separator("═", color_code=RED))
         print(format_box_line("Choose action:", color_code=RED))
-        print(format_box_line("  (1) Delete  │  (2) Browser  │  (3) Skip  │  (4) Next  │  (q) Quit", color_code=RED))
+        print(format_box_line("  (1) Delete  |  (2) Browser  |  (3) Skip  |  (4) Next  |  (q) Quit", color_code=RED))
         print(f"{RED}╚" + "═" * 78 + "╝" + RESET)
         print("Your choice: ", end='', flush=True)
 
