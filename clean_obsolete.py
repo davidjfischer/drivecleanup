@@ -1889,30 +1889,33 @@ def main():
     import argparse
 
     parser = argparse.ArgumentParser(
-        description='Analyze Google Drive folder for cleanup candidates',
+        description='Analyze Google Drive for cleanup candidates (entire Drive by default)',
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog='''
 Examples:
-  # Full workflow: Analyze AND clean a folder (default with Claude)
+  # Full workflow: Analyze AND clean entire Drive (default with Claude)
+  python analyze_drive_cleanup.py
+
+  # Analyze and clean specific folder only
   python analyze_drive_cleanup.py "https://drive.google.com/drive/u/0/folders/1tW34LrY4e1e3OIMJkBljP0JS5atcYXJh"
 
-  # Only analyze (no interactive cleanup)
-  python analyze_drive_cleanup.py 1tW34LrY4e1e3OIMJkBljP0JS5atcYXJh --analyze
+  # Only analyze entire Drive (no interactive cleanup)
+  python analyze_drive_cleanup.py --analyze
 
   # Only cleanup (interactive mode with existing report)
-  python analyze_drive_cleanup.py 1tW34LrY4e1e3OIMJkBljP0JS5atcYXJh --clean
+  python analyze_drive_cleanup.py --clean
 
   # Analyze without Claude (faster, simpler summaries)
-  python analyze_drive_cleanup.py 1tW34LrY4e1e3OIMJkBljP0JS5atcYXJh --analyze --no-claude
+  python analyze_drive_cleanup.py --analyze --no-claude
 
   # Use different AWS profile and region
-  python analyze_drive_cleanup.py 1tW34LrY4e1e3OIMJkBljP0JS5atcYXJh --aws-profile prod --aws-region eu-central-1
+  python analyze_drive_cleanup.py --aws-profile prod --aws-region eu-central-1
 
   # Set minimum age threshold to 30 days
-  python analyze_drive_cleanup.py 1tW34LrY4e1e3OIMJkBljP0JS5atcYXJh --analyze --min-age-days 30
+  python analyze_drive_cleanup.py --analyze --min-age-days 30
 
-  # Analyze entire Drive (no folder parameter)
-  python analyze_drive_cleanup.py --analyze
+  # Scan specific folder with 30-day age threshold
+  python analyze_drive_cleanup.py FOLDER_ID --min-age-days 30
         '''
     )
 
@@ -1920,7 +1923,7 @@ Examples:
         'folder',
         nargs='?',
         default=None,
-        help='Google Drive folder URL or ID (required for most operations)'
+        help='Google Drive folder URL or ID (optional - if omitted, scans entire Drive)'
     )
 
     parser.add_argument(
@@ -2070,9 +2073,11 @@ Examples:
 
         # Scan drive (folder-specific or entire drive)
         if folder_id:
+            logger.info(f"Scan scope: Specific folder ({folder_id})")
             # Scan the specific folder in detail
             analyzer.scan_folder(folder_id, max_files=args.max_files)
         else:
+            logger.info("Scan scope: Entire Google Drive (all files and folders you own)")
             analyzer.scan_drive(max_files=args.max_files)
 
         # Analyze files
@@ -2106,19 +2111,21 @@ Examples:
         logger.info("=" * 80)
 
         # Find the report file
-        if not folder_id:
-            logger.error("Folder ID/URL is required for cleanup mode")
-            sys.exit(1)
-
-        report_file = find_latest_report(folder_id)
+        scope_name = folder_id if folder_id else "full_drive"
+        report_file = find_latest_report(scope_name)
 
         if not report_file:
-            logger.error(f"No cleanup report found for folder {folder_id}")
-            logger.error(f"Expected file pattern: drive_cleanup_report_{folder_id}_*.json")
+            scope_desc = f"folder {folder_id}" if folder_id else "entire Drive"
+            logger.error(f"No cleanup report found for {scope_desc}")
+            logger.error(f"Expected file pattern: drive_cleanup_report_{scope_name}_*.json")
             logger.error("Please run analysis first (without --clean flag)")
             sys.exit(1)
 
         logger.info(f"Using report: {report_file}")
+        if folder_id:
+            logger.info(f"Cleanup scope: Specific folder ({folder_id})")
+        else:
+            logger.info("Cleanup scope: Entire Google Drive")
         logger.info("")
 
         # Authenticate with write access
@@ -2128,7 +2135,7 @@ Examples:
         logger.info("")
 
         # Run interactive cleanup
-        interactive_cleanup(service_write, report_file, folder_id)
+        interactive_cleanup(service_write, report_file, scope_name)
 
 if __name__ == '__main__':
     main()

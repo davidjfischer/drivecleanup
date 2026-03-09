@@ -12,14 +12,17 @@ Features:
 - Protects media files (photos, videos, audio) from deletion
 
 Usage:
-    # Scan Drive and build MD5 checksum cache
+    # Scan entire Drive and build MD5 checksum cache
     python clean_duplicates.py --checksums
 
-    # Interactive cleanup based on duplicates
+    # Interactive cleanup of ALL duplicates across entire Drive
+    python clean_duplicates.py --clean
+
+    # Interactive cleanup in specific folder only
     python clean_duplicates.py --clean FOLDER_ID
 
-    # Refresh cache and clean
-    python clean_duplicates.py --checksums --clean FOLDER_ID
+    # Refresh cache and clean entire Drive
+    python clean_duplicates.py --checksums --clean
 """
 
 import os
@@ -558,6 +561,76 @@ class DuplicateScanner:
         logger.info(f"Found {duplicates_found} duplicate files to remove")
         return duplicates
 
+    def find_duplicates_in_drive(self):
+        """Find ALL duplicate files across entire Drive.
+
+        Returns:
+            List of duplicate candidates for deletion
+        """
+        logger.info("Finding duplicates across entire Drive...")
+
+        # Find all files with duplicates (where MD5 appears more than once)
+        duplicates = []
+        duplicates_found = 0
+
+        for md5, files_with_hash in self.md5_to_files.items():
+            if len(files_with_hash) > 1:
+                # Sort by modification time (oldest first)
+                sorted_files = sorted(files_with_hash, key=lambda f: f.get('modifiedTime', ''), reverse=False)
+                original_file = sorted_files[0]
+                original_path = self.get_file_path(original_file)
+
+                # Mark all except the oldest as duplicates
+                for duplicate_file in sorted_files[1:]:
+                    mime_type = duplicate_file.get('mimeType', '')
+
+                    # Check if this is a protected media file
+                    media_mime_types = [
+                        'image/', 'video/', 'audio/',
+                        'application/vnd.google-apps.photo',
+                        'application/vnd.google-apps.video'
+                    ]
+
+                    # Also check file extensions
+                    media_extensions = [
+                        '.jpg', '.jpeg', '.png', '.gif', '.bmp', '.svg', '.webp', '.heic', '.heif',
+                        '.mp4', '.mov', '.avi', '.mkv', '.webm', '.flv', '.wmv', '.m4v',
+                        '.mp3', '.wav', '.m4a', '.flac', '.aac', '.ogg', '.wma'
+                    ]
+
+                    file_name_lower = duplicate_file.get('name', '').lower()
+                    is_media = (
+                        any(mime_type.startswith(prefix) for prefix in media_mime_types) or
+                        any(file_name_lower.endswith(ext) for ext in media_extensions)
+                    )
+
+                    # Only mark duplicate if it's NOT a media file (photos/videos are protected)
+                    if not is_media:
+                        duplicates_found += 1
+                        duplicate_path = self.get_file_path(duplicate_file)
+
+                        # Determine if it's a workspace file
+                        reason_text = "Duplicate file"
+                        if duplicate_file.get('is_workspace') or original_file.get('is_workspace'):
+                            reason_text = "Duplicate content (workspace file)"
+                        reason_text += f" - original at: {original_path}"
+
+                        candidate = {
+                            'id': duplicate_file['id'],
+                            'name': duplicate_file['name'],
+                            'path': duplicate_path,
+                            'size': int(duplicate_file.get('size', 0)) if 'size' in duplicate_file else 0,
+                            'modified': duplicate_file.get('modifiedTime'),
+                            'link': duplicate_file.get('webViewLink', 'N/A'),
+                            'reasons': [reason_text]
+                        }
+                        duplicates.append(candidate)
+                    else:
+                        logger.debug(f"Skipping duplicate media file (protected): {duplicate_file.get('name', 'Unknown')}")
+
+        logger.info(f"Found {duplicates_found} duplicate files to remove across entire Drive")
+        return duplicates
+
     def generate_report(self, duplicates, folder_id):
         """Generate JSON report for duplicate files.
 
@@ -604,33 +677,36 @@ def main():
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
-  # Scan Drive and build MD5 checksum cache
+  # Scan entire Drive and build MD5 checksum cache
   python duplicate_cleanup.py --checksums
 
-  # Clean duplicates in a specific folder
+  # Clean ALL duplicates across entire Drive (default)
+  python duplicate_cleanup.py --clean
+
+  # Clean duplicates in a specific folder only
   python duplicate_cleanup.py --clean FOLDER_ID
 
-  # Refresh cache and clean
-  python duplicate_cleanup.py --checksums --clean FOLDER_ID
+  # Refresh cache and clean entire Drive
+  python duplicate_cleanup.py --checksums --clean
         """
     )
 
     parser.add_argument(
         'folder_id',
         nargs='?',
-        help='Google Drive folder ID or URL (required for --clean)'
+        help='Google Drive folder ID or URL (optional - if omitted, scans entire Drive)'
     )
 
     parser.add_argument(
         '--checksums',
         action='store_true',
-        help='Scan Drive and build/refresh MD5 checksum cache'
+        help='Scan entire Drive and build/refresh MD5 checksum cache'
     )
 
     parser.add_argument(
         '--clean',
         action='store_true',
-        help='Interactive cleanup of duplicates in specified folder'
+        help='Interactive cleanup of duplicates (entire Drive if no folder specified, or specific folder)'
     )
 
     args = parser.parse_args()
@@ -656,10 +732,6 @@ Examples:
     if not args.checksums and not args.clean:
         logger.error("Please specify at least one operation: --checksums or --clean")
         parser.print_help()
-        sys.exit(1)
-
-    if args.clean and not folder_id:
-        logger.error("Folder ID is required for --clean operation")
         sys.exit(1)
 
     # Checksum scan phase
@@ -698,21 +770,29 @@ Examples:
         scanner = DuplicateScanner(service)
         scanner.scan_drive_for_checksums(refresh_cache=False)
 
-        # Find duplicates in folder
-        duplicates = scanner.find_duplicates_in_folder(folder_id)
+        # Find duplicates (entire Drive or specific folder)
+        if folder_id:
+            logger.info(f"Searching for duplicates in specific folder: {folder_id}")
+            duplicates = scanner.find_duplicates_in_folder(folder_id)
+            scope_name = folder_id
+        else:
+            logger.info("Searching for duplicates across entire Drive...")
+            duplicates = scanner.find_duplicates_in_drive()
+            scope_name = "drive"
 
         if not duplicates:
-            logger.info("No duplicates found in folder")
+            scope_desc = f"folder {folder_id}" if folder_id else "entire Drive"
+            logger.info(f"No duplicates found in {scope_desc}")
             sys.exit(0)
 
         # Generate report
-        report_file = scanner.generate_report(duplicates, folder_id)
+        report_file = scanner.generate_report(duplicates, scope_name)
 
         logger.info(f"Found {len(duplicates)} duplicate files")
         logger.info("")
 
         # Interactive cleanup
-        interactive_cleanup(service, report_file, folder_id)
+        interactive_cleanup(service, report_file, scope_name)
 
 
 if __name__ == '__main__':
