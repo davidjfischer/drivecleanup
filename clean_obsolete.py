@@ -431,9 +431,9 @@ class ContentExtractor:
         if not text or not bedrock_client:
             return None
 
-        # Use provided model_id or default to cross-region inference profile
+        # Use provided model_id or default to Claude 3.5 Sonnet v1 (stable, widely available)
         if not model_id:
-            model_id = "us.anthropic.claude-3-5-sonnet-20241022-v2:0"
+            model_id = "anthropic.claude-3-5-sonnet-20240620-v1:0"
 
         # Truncate text if too long (Claude has token limits)
         if len(text) > MAX_CLAUDE_CHARS:
@@ -512,7 +512,9 @@ Guidelines:
                 return None
 
         except Exception as e:
-            logger.debug(f"Error using Claude via Bedrock: {e}")
+            # Log at INFO level so users can see Bedrock errors without DEBUG logging
+            logger.info(f"Claude via Bedrock failed for {file_name}: {e}")
+            logger.debug(f"Full Bedrock error details: {e}", exc_info=True)
             return None
 
 # ============================================================================
@@ -539,9 +541,9 @@ class FileAnalyzer:
                     service_name='bedrock-runtime',
                     region_name=aws_region
                 )
-                model_display = self.claude_model_id or "us.anthropic.claude-3-5-sonnet-20241022-v2:0 (default)"
+                model_display = self.claude_model_id or "anthropic.claude-3-5-sonnet-20240620-v1:0 (default)"
                 logger.info(f"AWS Bedrock initialized with profile '{aws_profile}' in region '{aws_region}'")
-                logger.info(f"Using Claude model: {model_display}")
+                logger.info(f"Claude model: {model_display}")
             except Exception as e:
                 logger.warning(f"Failed to initialize AWS Bedrock: {e}")
                 logger.warning("Using fallback summary method")
@@ -975,6 +977,15 @@ class FileAnalyzer:
         if skipped_count > 0:
             logger.info(f"Skipping content analysis for {skipped_count} previously skipped files")
 
+        # Log files that don't support content extraction
+        non_extractable_count = len(all_candidates) - len(extractable) - skipped_count
+        if non_extractable_count > 0:
+            logger.info(f"Skipping {non_extractable_count} files with unsupported mime types for content analysis")
+            # Show a few examples at debug level
+            non_extractable = [c for c in all_candidates if c['mime_type'] not in extractable_mimes and not c['mime_type'].startswith('text/')]
+            for candidate in non_extractable[:3]:
+                logger.debug(f"  Unsupported mime type: {candidate['mime_type']} ({candidate['name']})")
+
         logger.info(f"Found {len(filtered_extractable)} candidates requiring content analysis")
         if len(filtered_extractable) > 0:
             logger.info(f"Analyzing content (this may take a while)...")
@@ -1004,7 +1015,7 @@ class FileAnalyzer:
                         if claude_result:
                             # Use Claude's summary
                             candidate['summary'] = claude_result['summary']
-                            logger.debug(f"Using Claude summary for: {candidate['name']}")
+                            logger.info(f"  ✓ Claude analysis succeeded for: {candidate['name']}")
 
                             # Use Claude's confidence if available and assessment is DELETE
                             if claude_result.get('assessment') == 'DELETE' and claude_result.get('confidence'):
@@ -1041,16 +1052,18 @@ class FileAnalyzer:
                             self.stats['content_analyzed'] += 1
                         else:
                             # Claude failed, use fallback
-                            logger.info(f"  Claude analysis failed for {candidate['name']}, using fallback summary")
+                            logger.info(f"  ✗ Claude analysis failed for {candidate['name']}, using fallback summary")
                             summary = ContentExtractor.create_summary(text, max_words=MAX_SUMMARY_WORDS)
                             candidate['summary'] = summary
                             self.stats['content_analyzed'] += 1
                     else:
                         # No Claude, use simple summary
-                        logger.debug(f"Claude not enabled, using simple summary for: {candidate['name']}")
+                        logger.info(f"  → Using simple summary (Claude disabled) for: {candidate['name']}")
                         summary = ContentExtractor.create_summary(text, max_words=MAX_SUMMARY_WORDS)
                         candidate['summary'] = summary
                         self.stats['content_analyzed'] += 1
+                else:
+                    logger.debug(f"No text extracted for {candidate['name']}")
             except Exception as e:
                 logger.debug(f"Error analyzing content for {candidate['name']}: {e}")
 
@@ -1903,7 +1916,7 @@ Examples:
         '--claude-model-id',
         type=str,
         default=None,
-        help='Claude model ID or inference profile ARN (default: us.anthropic.claude-3-5-sonnet-20241022-v2:0)'
+        help='Claude model ID or inference profile ARN (default: anthropic.claude-3-5-sonnet-20240620-v1:0)'
     )
 
     parser.add_argument(
