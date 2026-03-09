@@ -415,8 +415,14 @@ class ContentExtractor:
         return summary
 
     @staticmethod
-    def create_claude_summary(text, file_name, bedrock_client):
+    def create_claude_summary(text, file_name, bedrock_client, model_id=None):
         """Create an intelligent summary using Claude via AWS Bedrock.
+
+        Args:
+            text: The content to analyze
+            file_name: Name of the file being analyzed
+            bedrock_client: boto3 Bedrock client
+            model_id: Model ID or inference profile ARN (optional)
 
         Returns:
             dict with keys: 'summary', 'assessment', 'confidence'
@@ -424,6 +430,10 @@ class ContentExtractor:
         """
         if not text or not bedrock_client:
             return None
+
+        # Use provided model_id or default to cross-region inference profile
+        if not model_id:
+            model_id = "us.anthropic.claude-3-5-sonnet-20241022-v2:0"
 
         # Truncate text if too long (Claude has token limits)
         if len(text) > MAX_CLAUDE_CHARS:
@@ -461,8 +471,9 @@ Guidelines:
             }
 
             # Call Bedrock
+            logger.debug(f"Calling Bedrock with model: {model_id}")
             response = bedrock_client.invoke_model(
-                modelId="anthropic.claude-3-5-sonnet-20241022-v2:0",
+                modelId=model_id,
                 contentType="application/json",
                 accept="application/json",
                 body=json.dumps(request_body)
@@ -509,7 +520,7 @@ Guidelines:
 # ============================================================================
 
 class FileAnalyzer:
-    def __init__(self, service, analyze_content=False, use_claude=False, aws_profile='dev', aws_region='us-east-1', min_age_days=90, skipped_files=None):
+    def __init__(self, service, analyze_content=False, use_claude=False, aws_profile='dev', aws_region='us-east-1', claude_model_id=None, min_age_days=90, skipped_files=None):
         self.service = service
         self.analyze_content = analyze_content
         self.use_claude = use_claude
@@ -517,6 +528,7 @@ class FileAnalyzer:
         self.skipped_files = skipped_files or set()
         self.content_extractor = ContentExtractor(service) if analyze_content else None
         self.bedrock_client = None
+        self.claude_model_id = claude_model_id  # Store model ID for later use
 
         # Initialize Bedrock client if requested
         if use_claude and HAS_BEDROCK:
@@ -527,7 +539,9 @@ class FileAnalyzer:
                     service_name='bedrock-runtime',
                     region_name=aws_region
                 )
-                logger.info(f"AWS Bedrock initialized with profile '{aws_profile}' in region '{aws_region}' for Claude summaries")
+                model_display = self.claude_model_id or "us.anthropic.claude-3-5-sonnet-20241022-v2:0 (default)"
+                logger.info(f"AWS Bedrock initialized with profile '{aws_profile}' in region '{aws_region}'")
+                logger.info(f"Using Claude model: {model_display}")
             except Exception as e:
                 logger.warning(f"Failed to initialize AWS Bedrock: {e}")
                 logger.warning("Using fallback summary method")
@@ -983,7 +997,8 @@ class FileAnalyzer:
                         claude_result = ContentExtractor.create_claude_summary(
                             text,
                             candidate['name'],
-                            self.bedrock_client
+                            self.bedrock_client,
+                            model_id=self.claude_model_id
                         )
 
                         if claude_result:
@@ -1885,6 +1900,13 @@ Examples:
     )
 
     parser.add_argument(
+        '--claude-model-id',
+        type=str,
+        default=None,
+        help='Claude model ID or inference profile ARN (default: us.anthropic.claude-3-5-sonnet-20241022-v2:0)'
+    )
+
+    parser.add_argument(
         '--min-age-days',
         type=int,
         default=90,
@@ -1977,6 +1999,7 @@ Examples:
             use_claude=use_claude,
             aws_profile=args.aws_profile,
             aws_region=args.aws_region,
+            claude_model_id=args.claude_model_id,
             min_age_days=args.min_age_days,
             skipped_files=skipped_files
         )
