@@ -102,29 +102,38 @@ class DuplicateScanner:
         # Map for Google Workspace files: file_id -> content_md5
         self.workspace_content_md5 = {}
 
-    def _compute_content_md5(self, file_id, mime_type):
+    def _compute_content_md5(self, file_id, mime_type, file_name=None):
         """Compute MD5 checksum of Google Workspace file by exporting it.
 
         Args:
             file_id: Google Drive file ID
             mime_type: MIME type of the file
+            file_name: Optional file name for logging
 
         Returns:
             MD5 checksum string or None if export fails
         """
         # Map Google Workspace MIME types to export formats
         export_formats = {
-            'application/vnd.google-apps.document': 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',  # .docx
-            'application/vnd.google-apps.spreadsheet': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',  # .xlsx
-            'application/vnd.google-apps.presentation': 'application/vnd.openxmlformats-officedocument.presentationml.presentation',  # .pptx
-            'application/vnd.google-apps.drawing': 'application/pdf',  # .pdf
+            'application/vnd.google-apps.document': ('application/vnd.openxmlformats-officedocument.wordprocessingml.document', 'Word (.docx)'),
+            'application/vnd.google-apps.spreadsheet': ('application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', 'Excel (.xlsx)'),
+            'application/vnd.google-apps.presentation': ('application/vnd.openxmlformats-officedocument.presentationml.presentation', 'PowerPoint (.pptx)'),
+            'application/vnd.google-apps.drawing': ('application/pdf', 'PDF'),
         }
 
-        export_mime = export_formats.get(mime_type)
-        if not export_mime:
+        export_info = export_formats.get(mime_type)
+        if not export_info:
             return None
 
+        export_mime, format_name = export_info
+
         try:
+            # Log the conversion
+            if file_name:
+                logger.debug(f"Converting Google Workspace file to {format_name}: {file_name}")
+            else:
+                logger.debug(f"Converting Google Workspace file ({file_id}) to {format_name}")
+
             # Export file
             request = self.service.files().export_media(
                 fileId=file_id,
@@ -143,10 +152,16 @@ class DuplicateScanner:
             md5_hash = hashlib.md5()
             md5_hash.update(fh.read())
 
-            return md5_hash.hexdigest()
+            checksum = md5_hash.hexdigest()
+            if file_name:
+                logger.debug(f"Successfully computed MD5 for {file_name}: {checksum[:8]}...")
+            return checksum
 
         except Exception as e:
-            logger.debug(f"Failed to compute content MD5 for {file_id}: {e}")
+            if file_name:
+                logger.warning(f"Failed to compute content MD5 for {file_name}: {e}")
+            else:
+                logger.debug(f"Failed to compute content MD5 for {file_id}: {e}")
             return None
 
     def scan_drive_for_checksums(self, refresh_cache=False):
@@ -301,7 +316,8 @@ class DuplicateScanner:
                             logger.info(f"    Processing {workspace_scanned} workspace files...")
 
                         # Compute content MD5 by exporting
-                        content_md5 = self._compute_content_md5(item['id'], item['mimeType'])
+                        logger.info(f"    Exporting workspace file: {item['name']}")
+                        content_md5 = self._compute_content_md5(item['id'], item['mimeType'], item['name'])
 
                         if content_md5:
                             workspace_with_md5 += 1
@@ -399,6 +415,7 @@ class DuplicateScanner:
                         folder_files.append(item)
                     # Include Google Workspace files if we have content MD5 for them
                     elif item['id'] in self.workspace_content_md5:
+                        logger.debug(f"Using cached content MD5 for workspace file: {item['name']}")
                         item['md5Checksum'] = self.workspace_content_md5[item['id']]
                         item['is_workspace'] = True
                         folder_files.append(item)
