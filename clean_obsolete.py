@@ -431,9 +431,9 @@ class ContentExtractor:
         if not text or not bedrock_client:
             return None
 
-        # Use provided model_id or default to Claude 3.5 Sonnet v1 (stable, widely available)
+        # Use provided model_id or default to Claude Sonnet 4.6 (latest, most capable)
         if not model_id:
-            model_id = "anthropic.claude-3-5-sonnet-20240620-v1:0"
+            model_id = "anthropic.claude-sonnet-4-6"
 
         # Truncate text if too long (Claude has token limits)
         if len(text) > MAX_CLAUDE_CHARS:
@@ -541,7 +541,7 @@ class FileAnalyzer:
                     service_name='bedrock-runtime',
                     region_name=aws_region
                 )
-                model_display = self.claude_model_id or "anthropic.claude-3-5-sonnet-20240620-v1:0 (default)"
+                model_display = self.claude_model_id or "anthropic.claude-sonnet-4-6 (default)"
                 logger.info(f"AWS Bedrock initialized with profile '{aws_profile}' in region '{aws_region}'")
                 logger.info(f"Claude model: {model_display}")
             except Exception as e:
@@ -1916,7 +1916,7 @@ Examples:
         '--claude-model-id',
         type=str,
         default=None,
-        help='Claude model ID or inference profile ARN (default: anthropic.claude-3-5-sonnet-20240620-v1:0)'
+        help='Claude model ID (default: anthropic.claude-sonnet-4-6). Use "anthropic.claude-haiku-4-5-20251001-v1:0" for faster/cheaper analysis'
     )
 
     parser.add_argument(
