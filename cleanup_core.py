@@ -152,12 +152,31 @@ def parse_cleanup_report(report_file):
 
     for confidence in ['HIGH', 'MEDIUM', 'LOW']:
         for candidate in candidates.get(confidence, []):
-            file_id = extract_file_id_from_link(candidate.get('link', ''))
+            # Try to get file_id directly from JSON first (both scripts use 'id')
+            # Fall back to extracting from link for backwards compatibility
+            file_id = candidate.get('id')
+            if not file_id:
+                file_id = extract_file_id_from_link(candidate.get('link', ''))
+
+            # Handle different size formats
+            # duplicate_cleanup.py uses 'size_formatted' (string)
+            # drivecleanup.py uses 'size' (integer bytes)
+            size_str = candidate.get('size_formatted')
+            if not size_str:
+                size_bytes = candidate.get('size', 0)
+                if size_bytes < 1024:
+                    size_str = f"{size_bytes} bytes"
+                elif size_bytes < 1024 * 1024:
+                    size_str = f"{size_bytes / 1024:.1f} KB"
+                elif size_bytes < 1024 * 1024 * 1024:
+                    size_str = f"{size_bytes / (1024 * 1024):.1f} MB"
+                else:
+                    size_str = f"{size_bytes / (1024 * 1024 * 1024):.1f} GB"
 
             entry = {
                 'name': candidate.get('name', 'Unknown'),
                 'path': candidate.get('path'),
-                'size': candidate.get('size_formatted', 'Unknown'),
+                'size': size_str,
                 'link': candidate.get('link', ''),
                 'file_id': file_id,
                 'confidence': confidence,
