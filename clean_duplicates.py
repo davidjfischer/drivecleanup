@@ -5,15 +5,21 @@ Duplicate Cleanup Tool - MD5-based duplicate file detection for Google Drive.
 This script scans your Google Drive for duplicate files based on MD5 checksums
 and provides an interactive cleanup interface.
 
+Features:
+- Detects duplicates in binary files (PDFs, images, etc.) using native MD5 checksums
+- Detects duplicates in Google Workspace files (Docs, Sheets, Slides, Drawings)
+  by exporting and computing content MD5
+- Protects media files (photos, videos, audio) from deletion
+
 Usage:
     # Scan Drive and build MD5 checksum cache
-    python duplicate_cleanup.py --checksums
+    python clean_duplicates.py --checksums
 
     # Interactive cleanup based on duplicates
-    python duplicate_cleanup.py --clean FOLDER_ID
+    python clean_duplicates.py --clean FOLDER_ID
 
     # Refresh cache and clean
-    python duplicate_cleanup.py --checksums --clean FOLDER_ID
+    python clean_duplicates.py --checksums --clean FOLDER_ID
 """
 
 import os
@@ -22,10 +28,14 @@ import argparse
 import json
 import pickle
 import re
+import hashlib
+import io
+import tempfile
 from datetime import datetime, timezone
 from collections import defaultdict
 from loguru import logger
 from googleapiclient.discovery import build
+from googleapiclient.http import MediaIoBaseDownload
 from google_auth_oauthlib.flow import InstalledAppFlow
 from google.auth.transport.requests import Request
 
@@ -89,6 +99,55 @@ class DuplicateScanner:
         self.md5_to_files = defaultdict(list)
         self.folder_id_to_name = {}
         self.folder_id_to_parents = {}
+        # Map for Google Workspace files: file_id -> content_md5
+        self.workspace_content_md5 = {}
+
+    def _compute_content_md5(self, file_id, mime_type):
+        """Compute MD5 checksum of Google Workspace file by exporting it.
+
+        Args:
+            file_id: Google Drive file ID
+            mime_type: MIME type of the file
+
+        Returns:
+            MD5 checksum string or None if export fails
+        """
+        # Map Google Workspace MIME types to export formats
+        export_formats = {
+            'application/vnd.google-apps.document': 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',  # .docx
+            'application/vnd.google-apps.spreadsheet': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',  # .xlsx
+            'application/vnd.google-apps.presentation': 'application/vnd.openxmlformats-officedocument.presentationml.presentation',  # .pptx
+            'application/vnd.google-apps.drawing': 'application/pdf',  # .pdf
+        }
+
+        export_mime = export_formats.get(mime_type)
+        if not export_mime:
+            return None
+
+        try:
+            # Export file
+            request = self.service.files().export_media(
+                fileId=file_id,
+                mimeType=export_mime
+            )
+
+            # Download to memory
+            fh = io.BytesIO()
+            downloader = MediaIoBaseDownload(fh, request)
+            done = False
+            while not done:
+                status, done = downloader.next_chunk()
+
+            # Compute MD5
+            fh.seek(0)
+            md5_hash = hashlib.md5()
+            md5_hash.update(fh.read())
+
+            return md5_hash.hexdigest()
+
+        except Exception as e:
+            logger.debug(f"Failed to compute content MD5 for {file_id}: {e}")
+            return None
 
     def scan_drive_for_checksums(self, refresh_cache=False):
         """Scan entire Drive to build MD5 checksum cache.
@@ -114,8 +173,13 @@ class DuplicateScanner:
                 self.folder_id_to_name.update(cache_data.get('folders', {}))
                 self.folder_id_to_parents.update(cache_data.get('folder_parents', {}))
 
+                # Reconstruct workspace_content_md5 from cache
+                self.workspace_content_md5.update(cache_data.get('workspace_md5', {}))
+
                 total_files = sum(len(files) for files in self.md5_to_files.values())
+                workspace_files = len(self.workspace_content_md5)
                 logger.info(f"Loaded {total_files} files with MD5 checksums from cache")
+                logger.info(f"Loaded {workspace_files} workspace files with content MD5 from cache")
                 logger.info(f"Loaded {len(self.folder_id_to_name)} folder mappings from cache")
                 logger.info(f"Found {len(self.md5_to_files)} unique checksums")
 
@@ -205,13 +269,67 @@ class DuplicateScanner:
 
         logger.info(f"Scan complete: {scanned_files} files and {scanned_folders} folders")
 
+        # Now scan Google Workspace files (Docs, Sheets, Slides) and compute content MD5
+        logger.info("  Scanning Google Workspace files (Docs, Sheets, Slides)...")
+        workspace_mimetypes = [
+            'application/vnd.google-apps.document',
+            'application/vnd.google-apps.spreadsheet',
+            'application/vnd.google-apps.presentation',
+            'application/vnd.google-apps.drawing'
+        ]
+
+        workspace_scanned = 0
+        workspace_with_md5 = 0
+
+        for mime_type in workspace_mimetypes:
+            page_token = None
+            while True:
+                try:
+                    results = self.service.files().list(
+                        pageSize=100,  # Smaller batches for workspace files (export is expensive)
+                        pageToken=page_token,
+                        fields="nextPageToken, files(id, name, mimeType, parents, size, modifiedTime, webViewLink)",
+                        q=f"trashed=false and mimeType = '{mime_type}' and 'me' in owners"
+                    ).execute()
+
+                    items = results.get('files', [])
+
+                    for item in items:
+                        workspace_scanned += 1
+
+                        if workspace_scanned % 50 == 0:
+                            logger.info(f"    Processing {workspace_scanned} workspace files...")
+
+                        # Compute content MD5 by exporting
+                        content_md5 = self._compute_content_md5(item['id'], item['mimeType'])
+
+                        if content_md5:
+                            workspace_with_md5 += 1
+                            # Store in workspace map
+                            self.workspace_content_md5[item['id']] = content_md5
+                            # Add to md5_to_files with a special marker
+                            item['md5Checksum'] = content_md5  # Add MD5 to item for consistency
+                            item['is_workspace'] = True  # Mark as workspace file
+                            self.md5_to_files[content_md5].append(item)
+
+                    page_token = results.get('nextPageToken')
+                    if not page_token:
+                        break
+
+                except Exception as e:
+                    logger.error(f"Error scanning workspace files: {e}")
+                    break
+
+        logger.info(f"Scanned {workspace_scanned} workspace files, computed {workspace_with_md5} content MD5s")
+
         # Save to cache (checksums and folder structure)
         try:
             logger.debug(f"Saving MD5 checksum cache to {CHECKSUMS_CACHE_FILE}")
             cache_data = {
                 'checksums': dict(self.md5_to_files),
                 'folders': self.folder_id_to_name,
-                'folder_parents': self.folder_id_to_parents
+                'folder_parents': self.folder_id_to_parents,
+                'workspace_md5': self.workspace_content_md5
             }
             with open(CHECKSUMS_CACHE_FILE, 'w', encoding='utf-8') as f:
                 json.dump(cache_data, f, indent=2)
@@ -260,7 +378,7 @@ class DuplicateScanner:
         """
         logger.info(f"Finding duplicates in folder: {folder_id}")
 
-        # Get all files in the folder (recursively)
+        # Get all files in the folder (including Google Workspace files)
         folder_files = []
         page_token = None
 
@@ -274,7 +392,16 @@ class DuplicateScanner:
                 ).execute()
 
                 items = results.get('files', [])
-                folder_files.extend([item for item in items if 'md5Checksum' in item])
+
+                for item in items:
+                    # Include files with native MD5
+                    if 'md5Checksum' in item:
+                        folder_files.append(item)
+                    # Include Google Workspace files if we have content MD5 for them
+                    elif item['id'] in self.workspace_content_md5:
+                        item['md5Checksum'] = self.workspace_content_md5[item['id']]
+                        item['is_workspace'] = True
+                        folder_files.append(item)
 
                 page_token = results.get('nextPageToken')
                 if not page_token:
@@ -284,7 +411,8 @@ class DuplicateScanner:
                 logger.error(f"Error scanning folder: {e}")
                 break
 
-        logger.info(f"Found {len(folder_files)} files with MD5 in folder")
+        workspace_count = sum(1 for f in folder_files if f.get('is_workspace'))
+        logger.info(f"Found {len(folder_files)} files with MD5 in folder ({workspace_count} workspace files)")
 
         # Create set of file IDs in this folder
         folder_file_ids = {f['id'] for f in folder_files}
@@ -335,6 +463,12 @@ class DuplicateScanner:
                             else:
                                 size_formatted = f"{size_mb:.1f} MB"
 
+                            # Add indicator if this is a workspace file content duplicate
+                            reason_text = "Duplicate file"
+                            if duplicate_file.get('is_workspace') or original_file.get('is_workspace'):
+                                reason_text = "Duplicate content (workspace file)"
+                            reason_text += f" - original at: {original_path}"
+
                             candidate = {
                                 'id': duplicate_file['id'],
                                 'name': duplicate_file['name'],
@@ -342,7 +476,7 @@ class DuplicateScanner:
                                 'size': size,
                                 'size_formatted': size_formatted,
                                 'modified': duplicate_file.get('modifiedTime'),
-                                'reasons': [f"Duplicate file - original at: {original_path}"],
+                                'reasons': [reason_text],
                                 'link': duplicate_file.get('webViewLink', 'N/A'),
                                 'mime_type': mime_type,
                                 'summary': None
@@ -381,6 +515,12 @@ class DuplicateScanner:
                             else:
                                 size_formatted = f"{size_mb:.1f} MB"
 
+                            # Add indicator if this is a workspace file content duplicate
+                            reason_text = "Duplicate file (in same folder)"
+                            if duplicate_file.get('is_workspace') or original_file.get('is_workspace'):
+                                reason_text = "Duplicate content (workspace file, in same folder)"
+                            reason_text += f" - keep oldest at: {original_path}"
+
                             candidate = {
                                 'id': duplicate_file['id'],
                                 'name': duplicate_file['name'],
@@ -388,7 +528,7 @@ class DuplicateScanner:
                                 'size': size,
                                 'size_formatted': size_formatted,
                                 'modified': duplicate_file.get('modifiedTime'),
-                                'reasons': [f"Duplicate file (in same folder) - keep oldest at: {original_path}"],
+                                'reasons': [reason_text],
                                 'link': duplicate_file.get('webViewLink', 'N/A'),
                                 'mime_type': mime_type,
                                 'summary': None
