@@ -324,6 +324,7 @@ def interactive_cleanup(service, report_file, folder_id):
     deleted_count = 0
     skipped_count = 0
     already_processed_count = 0
+    auto_decision = None  # Track "delete all" or "skip all" choice
 
     for i, entry in enumerate(entries):
         # Skip if already deleted or skipped
@@ -335,6 +336,37 @@ def interactive_cleanup(service, report_file, folder_id):
         if entry['file_id'] in skipped_files:
             logger.debug(f"Skipping already skipped file: {entry['name']}")
             already_processed_count += 1
+            continue
+
+        # Handle auto-decision from "delete all" or "skip all"
+        if auto_decision == 'delete':
+            logger.info(f"[AUTO-DELETE] Processing file {i + 1}/{len(entries)}: {entry['name']}")
+            try:
+                service.files().update(
+                    fileId=entry['file_id'],
+                    body={'trashed': True}
+                ).execute()
+                logger.info(f"✅ Moved to trash (auto): {entry['name']}")
+                log_deleted_file(folder_id, entry['name'], entry['link'], entry['size'])
+                deleted_files.add(entry['file_id'])
+                deleted_count += 1
+            except HttpError as e:
+                if e.resp.status == 404:
+                    logger.warning(f"⚠️  File not found (404) - treating as deleted: {entry['name']}")
+                    log_deleted_file(folder_id, entry['name'], entry['link'], entry['size'])
+                    deleted_files.add(entry['file_id'])
+                    deleted_count += 1
+                else:
+                    logger.error(f"❌ Failed to delete (auto): HTTP {e.resp.status} - {entry['name']}")
+            except Exception as e:
+                logger.error(f"❌ Failed to delete (auto): {type(e).__name__} - {entry['name']}")
+            continue
+
+        if auto_decision == 'skip':
+            logger.info(f"[AUTO-SKIP] Skipping file {i + 1}/{len(entries)}: {entry['name']}")
+            log_skipped_file(folder_id, entry['name'], entry['link'], entry['size'])
+            skipped_files.add(entry['file_id'])
+            skipped_count += 1
             continue
 
         # Log file description BEFORE showing dialog
@@ -429,7 +461,8 @@ def interactive_cleanup(service, report_file, folder_id):
         # Print options
         print(format_box_separator("═", color_code=RED))
         print(format_box_line("Choose action:", color_code=RED))
-        print(format_box_line("  (1) Delete  │  (2) Browser  │  (3) Skip  │  (4) Next  │  (q) Quit", color_code=RED))
+        print(format_box_line("  (1) Delete  │  (2) Browser  │  (3) Skip  │  (4) Next", color_code=RED))
+        print(format_box_line("  (5) Delete all  │  (6) Skip all  │  (q) Quit", color_code=RED))
         print(f"{RED}╚" + "═" * 78 + "╝" + RESET)
         print("Your choice: ", end='', flush=True)
 
@@ -518,6 +551,64 @@ def interactive_cleanup(service, report_file, folder_id):
                 print(f"➡️  Moving to next file")
                 action_complete = True
 
+            elif choice == '5':
+                # Delete all - delete current file and all remaining files
+                logger.info(f"🗑️  Delete all selected - deleting current and all remaining files")
+                print(f"🗑️  Delete all - processing current file and auto-deleting remaining files...")
+
+                # Delete current file first
+                if not entry['file_id']:
+                    logger.error("Cannot delete: File ID not found")
+                    logger.error("This should not happen - please report as bug")
+                    break
+
+                logger.debug(f"Attempting to move file to trash: {entry['file_id']}")
+                try:
+                    service.files().update(
+                        fileId=entry['file_id'],
+                        body={'trashed': True}
+                    ).execute()
+                    logger.info(f"✅ Moved to trash: {entry['name']}")
+                    print(f"✅ Moved to trash successfully!")
+                    log_deleted_file(folder_id, entry['name'], entry['link'], entry['size'])
+                    deleted_files.add(entry['file_id'])
+                    deleted_count += 1
+                except HttpError as e:
+                    if e.resp.status == 404:
+                        logger.warning(f"⚠️  File not found (404) - treating as deleted: {entry['name']}")
+                        print(f"⚠️  File not found (404) - treating as deleted")
+                        log_deleted_file(folder_id, entry['name'], entry['link'], entry['size'])
+                        deleted_files.add(entry['file_id'])
+                        deleted_count += 1
+                    else:
+                        logger.error(f"❌ Failed to delete: HTTP {e.resp.status}")
+                        print(f"❌ Failed to delete: {e}")
+                except Exception as e:
+                    logger.error(f"❌ Failed to delete: {type(e).__name__}")
+                    print(f"❌ Failed to delete: {e}")
+
+                # Set auto-decision for remaining files
+                auto_decision = 'delete'
+                logger.info("Auto-delete enabled for remaining files")
+                action_complete = True
+
+            elif choice == '6':
+                # Skip all - skip current file and all remaining files
+                logger.info(f"⏭️  Skip all selected - skipping current and all remaining files")
+                print(f"⏭️  Skip all - processing current file and auto-skipping remaining files...")
+
+                # Skip current file
+                logger.info(f"⏭️  Skipped: {entry['name']}")
+                print(f"⏭️  Skipped")
+                log_skipped_file(folder_id, entry['name'], entry['link'], entry['size'])
+                skipped_files.add(entry['file_id'])
+                skipped_count += 1
+
+                # Set auto-decision for remaining files
+                auto_decision = 'skip'
+                logger.info("Auto-skip enabled for remaining files")
+                action_complete = True
+
             elif choice == 'q':
                 print("\n" + "═" * 80)
                 print("CLEANUP SESSION SUMMARY")
@@ -554,8 +645,8 @@ def interactive_cleanup(service, report_file, folder_id):
                 return (deleted_count, skipped_count, already_processed_count)
 
             else:
-                logger.warning(f"Invalid choice: {choice}. Please press 1, 2, 3, 4, or q")
-                print(f"❌ Invalid choice '{choice}'. Please press 1, 2, 3, 4, or q")
+                logger.warning(f"Invalid choice: {choice}. Please press 1, 2, 3, 4, 5, 6, or q")
+                print(f"❌ Invalid choice '{choice}'. Please press 1, 2, 3, 4, 5, 6, or q")
                 print("Your choice: ", end='', flush=True)
                 choice = get_single_key().lower()
                 print(choice)
