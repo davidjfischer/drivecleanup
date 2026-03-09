@@ -641,7 +641,7 @@ class FileAnalyzer:
 
         return reasons
 
-    def classify_delete_confidence(self, reasons, age_days, size, mime_type=''):
+    def classify_delete_confidence(self, reasons, age_days, size, mime_type='', file_name=''):
         """Classify how confident we are this should be deleted."""
 
         # NEVER suggest deleting media files (photos, videos, audio)
@@ -651,7 +651,21 @@ class FileAnalyzer:
             'application/vnd.google-apps.video'
         ]
 
-        if any(mime_type.startswith(prefix) for prefix in media_mime_types):
+        # Also check file extensions for media files (more robust than MIME types alone)
+        media_extensions = [
+            '.jpg', '.jpeg', '.png', '.gif', '.bmp', '.svg', '.webp', '.heic', '.heif',
+            '.mp4', '.mov', '.avi', '.mkv', '.webm', '.flv', '.wmv', '.m4v',
+            '.mp3', '.wav', '.m4a', '.flac', '.aac', '.ogg', '.wma'
+        ]
+
+        file_name_lower = file_name.lower()
+        is_media = (
+            any(mime_type.startswith(prefix) for prefix in media_mime_types) or
+            any(file_name_lower.endswith(ext) for ext in media_extensions)
+        )
+
+        if is_media:
+            logger.debug(f"Skipping media file (protected): {file_name} (MIME: {mime_type})")
             return None  # Never suggest deleting media files
 
         score = 0
@@ -909,7 +923,7 @@ class FileAnalyzer:
 
             # If we have reasons, classify confidence
             if reasons:
-                confidence = self.classify_delete_confidence(reasons, age_days, size, mime_type)
+                confidence = self.classify_delete_confidence(reasons, age_days, size, mime_type, name)
 
                 if confidence:
                     candidate = {
@@ -978,16 +992,19 @@ class FileAnalyzer:
             logger.info(f"Skipping content analysis for {skipped_count} previously skipped files")
 
         # Log files that don't support content extraction
-        non_extractable_count = len(all_candidates) - len(extractable) - skipped_count
+        non_extractable = [c for c in all_candidates if c['mime_type'] not in extractable_mimes and not c['mime_type'].startswith('text/') and c['id'] not in self.skipped_files]
+        non_extractable_count = len(non_extractable)
         if non_extractable_count > 0:
-            logger.info(f"Skipping {non_extractable_count} files with unsupported mime types for content analysis")
-            # Show a few examples at debug level
-            non_extractable = [c for c in all_candidates if c['mime_type'] not in extractable_mimes and not c['mime_type'].startswith('text/')]
-            for candidate in non_extractable[:3]:
-                logger.debug(f"  Unsupported mime type: {candidate['mime_type']} ({candidate['name']})")
+            logger.info(f"Skipping {non_extractable_count} files with unsupported mime types for content analysis:")
+            # Show all files with unsupported types
+            for candidate in non_extractable:
+                logger.info(f"  • {candidate['name']} (MIME: {candidate['mime_type']})")
 
         logger.info(f"Found {len(filtered_extractable)} candidates requiring content analysis")
         if len(filtered_extractable) > 0:
+            if self.use_claude and self.bedrock_client:
+                model_display = self.claude_model_id or "us.anthropic.claude-sonnet-4-6"
+                logger.info(f"Using Claude model: {model_display}")
             logger.info(f"Analyzing content (this may take a while)...")
 
         for i, candidate in enumerate(filtered_extractable):
@@ -1013,13 +1030,16 @@ class FileAnalyzer:
                         )
 
                         if claude_result:
-                            # Use Claude's summary
+                            # Store Claude's full assessment
                             candidate['summary'] = claude_result['summary']
+                            candidate['claude_assessment'] = claude_result.get('assessment')
+                            candidate['claude_confidence'] = claude_result.get('confidence')
+                            candidate['claude_reasoning'] = claude_result.get('reasoning')
                             logger.info(f"  ✓ Claude analysis succeeded for: {candidate['name']}")
 
                             # Use Claude's confidence if available and assessment is DELETE
                             if claude_result.get('assessment') == 'DELETE' and claude_result.get('confidence'):
-                                # Store Claude's reasoning
+                                # Store Claude's reasoning in reasons for visibility
                                 if claude_result.get('reasoning'):
                                     candidate['reasons'].append(f"Claude assessment: {claude_result['reasoning']}")
 
@@ -1392,7 +1412,10 @@ def parse_cleanup_report(report_file):
                     'file_id': file_id,
                     'confidence': confidence,
                     'reasons': candidate.get('reasons', []),
-                    'summary': candidate.get('summary')
+                    'summary': candidate.get('summary'),
+                    'claude_assessment': candidate.get('claude_assessment'),
+                    'claude_confidence': candidate.get('claude_confidence'),
+                    'claude_reasoning': candidate.get('claude_reasoning')
                 }
                 entries.append(entry)
 
@@ -1663,6 +1686,33 @@ def interactive_cleanup(service, report_file, folder_id):
                             current_line = "  " + word + " "
                     if current_line.strip():
                         print(format_box_line(current_line.rstrip(), color_code=RED))
+
+        # Print Claude's assessment if available
+        if entry.get('claude_assessment'):
+            print(format_box_separator("─", color_code=RED))
+            print(format_box_line("Claude AI Assessment:", color_code=RED))
+
+            # Show decision and confidence
+            decision = entry.get('claude_assessment', 'N/A')
+            confidence = entry.get('claude_confidence', 'N/A')
+            print(format_box_line(f"  Decision: {decision}", color_code=RED))
+            print(format_box_line(f"  Confidence: {confidence}", color_code=RED))
+
+            # Show reasoning if available
+            if entry.get('claude_reasoning'):
+                print(format_box_line("  Reasoning:", color_code=RED))
+                reasoning = entry['claude_reasoning']
+                # Word wrap reasoning
+                words = reasoning.split()
+                current_line = "    "
+                for word in words:
+                    if len(current_line + word + " ") <= BOX_MAX_TEXT_WIDTH:
+                        current_line += word + " "
+                    else:
+                        print(format_box_line(current_line.rstrip(), color_code=RED))
+                        current_line = "    " + word + " "
+                if current_line.strip():
+                    print(format_box_line(current_line.rstrip(), color_code=RED))
 
         # Print options
         print(format_box_separator("═", color_code=RED))
