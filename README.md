@@ -50,7 +50,7 @@ uv sync
 ### Full Workflow (Refresh + Analyze + Interactive Cleanup)
 
 ```bash
-uv run python drivecleanup.py "https://drive.google.com/drive/folders/YOUR_FOLDER_ID"
+uv run python clean_obsolete.py "https://drive.google.com/drive/folders/YOUR_FOLDER_ID"
 ```
 
 ### Workflow Steps (Flexible Combinations)
@@ -59,19 +59,19 @@ The tool supports three independent workflow steps that can be combined:
 
 ```bash
 # Refresh checksum cache only
-uv run python drivecleanup.py FOLDER_ID --refresh_checksums
+uv run python clean_obsolete.py FOLDER_ID --refresh_checksums
 
 # Analysis only
-uv run python drivecleanup.py FOLDER_ID --analyze
+uv run python clean_obsolete.py FOLDER_ID --analyze
 
 # Cleanup only (uses existing report)
-uv run python drivecleanup.py FOLDER_ID --clean
+uv run python clean_obsolete.py FOLDER_ID --clean
 
 # Refresh + Analyze (skip cleanup)
-uv run python drivecleanup.py FOLDER_ID --refresh_checksums --analyze
+uv run python clean_obsolete.py FOLDER_ID --refresh_checksums --analyze
 
 # Analyze + Cleanup (skip refresh)
-uv run python drivecleanup.py FOLDER_ID --analyze --clean
+uv run python clean_obsolete.py FOLDER_ID --analyze --clean
 ```
 
 Steps always execute in order: **Refresh → Analyze → Clean**
@@ -79,13 +79,13 @@ Steps always execute in order: **Refresh → Analyze → Clean**
 ### Without Claude AI (faster, simpler)
 
 ```bash
-uv run python drivecleanup.py FOLDER_ID --no-claude
+uv run python clean_obsolete.py FOLDER_ID --no-claude
 ```
 
 ### Custom AWS Profile
 
 ```bash
-uv run python drivecleanup.py FOLDER_ID --aws-profile prod --aws-region eu-central-1
+uv run python clean_obsolete.py FOLDER_ID --aws-profile prod --aws-region eu-central-1
 ```
 
 ## Interactive Controls
@@ -177,7 +177,7 @@ For faster duplicate detection, the tool caches MD5 checksums of all files in yo
 **Force refresh the cache:**
 ```bash
 # Rescan entire Drive to update checksum cache
-uv run python drivecleanup.py FOLDER_ID --refresh_checksums
+uv run python clean_obsolete.py FOLDER_ID --refresh_checksums
 ```
 
 **When to refresh:**
@@ -207,7 +207,7 @@ Log files include:
 ### Running from source
 
 ```bash
-uv run python drivecleanup.py --help
+uv run python clean_obsolete.py --help
 ```
 
 ### Running tests

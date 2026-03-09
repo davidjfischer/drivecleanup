@@ -6,7 +6,7 @@ This document describes the refactoring and code quality improvements made to th
 
 ## 1. Test Coverage
 
-Added comprehensive unit tests in `test_drivecleanup.py` covering:
+Added comprehensive unit tests in `test_clean_obsolete.py` covering:
 
 - **Helper Functions** (8 tests)
   - URL and ID extraction functions

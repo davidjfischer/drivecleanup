@@ -1,6 +1,6 @@
 """
 Shared cleanup module for DriveCleanup tools.
-Contains common interactive cleanup logic used by both duplicate_cleanup.py and drivecleanup.py.
+Contains common interactive cleanup logic used by both clean_duplicates.py and clean_obsolete.py.
 """
 
 import os
@@ -159,8 +159,8 @@ def parse_cleanup_report(report_file):
                 file_id = extract_file_id_from_link(candidate.get('link', ''))
 
             # Handle different size formats
-            # duplicate_cleanup.py uses 'size_formatted' (string)
-            # drivecleanup.py uses 'size' (integer bytes)
+            # clean_duplicates.py uses 'size_formatted' (string)
+            # clean_obsolete.py uses 'size' (integer bytes)
             size_str = candidate.get('size_formatted')
             if not size_str:
                 size_bytes = candidate.get('size', 0)

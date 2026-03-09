@@ -1,7 +1,7 @@
 # Code Refactoring Plan
 
 ## Goal
-Split the monolithic 1868-line `drivecleanup.py` file into modular components for better maintainability.
+Split the monolithic 1868-line `clean_obsolete.py` file into modular components for better maintainability.
 
 ## Completed ✅
 
@@ -55,20 +55,20 @@ Split the monolithic 1868-line `drivecleanup.py` file into modular components fo
 - `print_colored_tip_box()` - Colored tip boxes
 - `interactive_cleanup()` - Interactive cleanup UI
 
-### 7. drivecleanup.py (refactored)
+### 7. clean_obsolete.py (refactored)
 - Import all modules
 - `main()` function only
 - Command-line argument parsing
 - Workflow orchestration
 
-### 8. test_drivecleanup.py (update)
+### 8. test_clean_obsolete.py (update)
 - Update imports to use new modules
 - Ensure all tests still pass
 
 ## Module Dependencies
 
 ```
-drivecleanup.py (main)
+clean_obsolete.py (main)
 ├── config.py
 ├── utils.py
 │   └── config.py
@@ -100,7 +100,7 @@ drivecleanup.py (main)
 - `content_extractor.py`: ~320 lines
 - `file_analyzer.py`: ~600 lines
 - `ui.py`: ~350 lines
-- `drivecleanup.py`: ~200 lines (main only)
+- `clean_obsolete.py`: ~200 lines (main only)
 
 Total: ~1840 lines (vs 1868 lines monolithic)
 
@@ -108,8 +108,8 @@ Total: ~1840 lines (vs 1868 lines monolithic)
 
 1. Create `ui.py` with UI functions
 2. Create `file_analyzer.py` with FileAnalyzer class
-3. Refactor `drivecleanup.py` to import and orchestrate
-4. Update `test_drivecleanup.py` imports
+3. Refactor `clean_obsolete.py` to import and orchestrate
+4. Update `test_clean_obsolete.py` imports
 5. Run all tests to verify refactoring
 6. Update documentation
 7. Commit and push

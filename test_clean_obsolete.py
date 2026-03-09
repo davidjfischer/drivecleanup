@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Unit tests for DriveCleanup
+Unit tests for clean_obsolete (DriveCleanup)
 """
 
 import unittest
@@ -10,7 +10,7 @@ import sys
 import os
 
 # Import the module to test
-import drivecleanup
+import clean_obsolete as drivecleanup
 
 
 class TestHelperFunctions(unittest.TestCase):

@@ -6,19 +6,19 @@
 
 The project has been split into specialized scripts:
 
-#### 1. `duplicate_cleanup.py` - MD5-based Duplicate Detection
+#### 1. `clean_duplicates.py` - MD5-based Duplicate Detection
 **Purpose:** Find and clean duplicate files based on MD5 checksums
 
 **Usage:**
 ```bash
 # Build MD5 checksum cache by scanning entire Drive
-python duplicate_cleanup.py --checksums
+python clean_duplicates.py --checksums
 
 # Interactive cleanup of duplicates in a folder
-python duplicate_cleanup.py --clean FOLDER_ID
+python clean_duplicates.py --clean FOLDER_ID
 
 # Refresh cache and clean in one step
-python duplicate_cleanup.py --checksums --clean FOLDER_ID
+python clean_duplicates.py --checksums --clean FOLDER_ID
 ```
 
 **Features:**
@@ -28,22 +28,22 @@ python duplicate_cleanup.py --checksums --clean FOLDER_ID
 - Protects media files (photos, videos, audio) from deletion
 - Interactive cleanup with full file paths displayed
 
-#### 2. `drivecleanup.py` - Content Analysis & Cleanup
+#### 2. `clean_obsolete.py` - Content Analysis & Cleanup
 **Purpose:** Analyze file content with Claude AI and clean based on analysis
 
 **Usage:**
 ```bash
 # Full workflow: Analyze and clean
-python drivecleanup.py FOLDER_ID
+python clean_obsolete.py FOLDER_ID
 
 # Analysis only
-python drivecleanup.py FOLDER_ID --analyze
+python clean_obsolete.py FOLDER_ID --analyze
 
 # Cleanup only (uses existing report)
-python drivecleanup.py FOLDER_ID --clean
+python clean_obsolete.py FOLDER_ID --clean
 
 # Without Claude AI (faster, simpler)
-python drivecleanup.py FOLDER_ID --no-claude
+python clean_obsolete.py FOLDER_ID --no-claude
 ```
 
 **Features:**
@@ -88,38 +88,38 @@ This protection applies even when duplicates are found.
 ### For Duplicate Cleanup:
 ```bash
 # Step 1: Build checksum cache (do this once, or when you've added many files)
-python duplicate_cleanup.py --checksums
+python clean_duplicates.py --checksums
 
 # Step 2: Clean duplicates in a specific folder
-python duplicate_cleanup.py --clean "https://drive.google.com/drive/folders/YOUR_FOLDER_ID"
+python clean_duplicates.py --clean "https://drive.google.com/drive/folders/YOUR_FOLDER_ID"
 ```
 
 ### For Content-Based Cleanup:
 ```bash
 # Analyze and clean in one session
-python drivecleanup.py "https://drive.google.com/drive/folders/YOUR_FOLDER_ID"
+python clean_obsolete.py "https://drive.google.com/drive/folders/YOUR_FOLDER_ID"
 ```
 
 ### Combined Approach:
 ```bash
 # 1. First, clean duplicates (fast, high confidence)
-python duplicate_cleanup.py --checksums --clean FOLDER_ID
+python clean_duplicates.py --checksums --clean FOLDER_ID
 
 # 2. Then, analyze remaining files with content analysis
-python drivecleanup.py FOLDER_ID --analyze --clean
+python clean_obsolete.py FOLDER_ID --analyze --clean
 ```
 
 ## Pending Tasks 🔄
 
-### `drivecleanup.py` Further Refactoring (Optional)
+### `clean_obsolete.py` Further Refactoring (Optional)
 
-The current `drivecleanup.py` still contains some duplicated code that could be cleaned up:
-1. Remove `--refresh_checksums` option (now in `duplicate_cleanup.py`)
+The current `clean_obsolete.py` still contains some duplicated code that could be cleaned up:
+1. Remove `--refresh_checksums` option (now in `clean_duplicates.py`)
 2. Remove duplicate UI functions (already in `cleanup_core.py`)
 3. Remove duplicate `interactive_cleanup()` function (use import from `cleanup_core`)
 4. Remove duplicate helper functions (already in `utils.py` or `cleanup_core.py`)
 
-**Impact:** This would reduce `drivecleanup.py` from ~2230 lines to ~1200 lines, but is not critical for functionality.
+**Impact:** This would reduce `clean_obsolete.py` from ~2230 lines to ~1200 lines, but is not critical for functionality.
 
 **Note:** The current version works correctly - these are code cleanup improvements only.
 
@@ -151,39 +151,39 @@ If you were using the old combined script:
 
 **Old:**
 ```bash
-python drivecleanup.py FOLDER_ID --refresh_checksums --analyze --clean
+python clean_obsolete.py FOLDER_ID --refresh_checksums --analyze --clean
 ```
 
 **New:**
 ```bash
 # Duplicate cleanup (replaces --refresh_checksums)
-python duplicate_cleanup.py --checksums --clean FOLDER_ID
+python clean_duplicates.py --checksums --clean FOLDER_ID
 
 # Content analysis and cleanup (replaces --analyze --clean)
-python drivecleanup.py FOLDER_ID --analyze --clean
+python clean_obsolete.py FOLDER_ID --analyze --clean
 ```
 
 Or run them separately for better control:
 ```bash
 # Step 1: Duplicates only
-python duplicate_cleanup.py --checksums
-python duplicate_cleanup.py --clean FOLDER_ID
+python clean_duplicates.py --checksums
+python clean_duplicates.py --clean FOLDER_ID
 
 # Step 2: Content analysis
-python drivecleanup.py FOLDER_ID
+python clean_obsolete.py FOLDER_ID
 ```
 
 ## Testing Recommendations
 
-1. **Test `duplicate_cleanup.py` first:**
+1. **Test `clean_duplicates.py` first:**
    ```bash
-   python duplicate_cleanup.py --checksums
-   python duplicate_cleanup.py --clean YOUR_TEST_FOLDER_ID
+   python clean_duplicates.py --checksums
+   python clean_duplicates.py --clean YOUR_TEST_FOLDER_ID
    ```
 
-2. **Then test `drivecleanup.py`:**
+2. **Then test `clean_obsolete.py`:**
    ```bash
-   python drivecleanup.py YOUR_TEST_FOLDER_ID --no-claude
+   python clean_obsolete.py YOUR_TEST_FOLDER_ID --no-claude
    ```
 
 3. **Verify report formats:**
