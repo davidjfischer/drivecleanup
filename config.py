@@ -11,10 +11,11 @@ STATE_DIR = 'state'
 REPORTS_DIR = 'reports'
 LOGS_DIR = 'logs'
 PROMPTS_DIR = 'prompts'
+CHECKSUMS_DIR = 'checksums'
 
 # Cache files
 import os
-CHECKSUMS_CACHE_FILE = os.path.join(STATE_DIR, 'drive_checksums_cache.json')
+CHECKSUMS_CACHE_FILE = os.path.join(CHECKSUMS_DIR, 'drive_checksums_cache.json')
 
 # UI Box formatting constants
 BOX_WIDTH = 78

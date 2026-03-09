@@ -71,6 +71,7 @@ SCOPES_WRITE = ['https://www.googleapis.com/auth/drive']  # For deletion
 STATE_DIR = 'state'
 REPORTS_DIR = 'reports'
 LOGS_DIR = 'logs'
+CHECKSUMS_DIR = 'checksums'
 
 # UI Box formatting constants
 BOX_WIDTH = 78
@@ -95,6 +96,7 @@ MAX_CANDIDATES_IN_REPORT = 50
 os.makedirs(STATE_DIR, exist_ok=True)
 os.makedirs(REPORTS_DIR, exist_ok=True)
 os.makedirs(LOGS_DIR, exist_ok=True)
+os.makedirs(CHECKSUMS_DIR, exist_ok=True)
 
 # Configure logger (stdout only initially, file logging added later)
 logger.remove()
@@ -439,25 +441,23 @@ class ContentExtractor:
         if len(text) > MAX_CLAUDE_CHARS:
             text = text[:MAX_CLAUDE_CHARS] + "... [truncated]"
 
-        prompt = f"""Analyze this file content and provide a structured assessment for cleanup decisions.
+        prompt = f"""Analyze this file and provide a concise assessment.
 
-File name: {file_name}
+File: {file_name}
 
 Content:
 {text}
 
-Please respond in this EXACT format:
-Summary: [2-3 sentence summary of what this file contains]
-Assessment: [KEEP/DELETE]
-Confidence: [HIGH/MEDIUM/LOW]
-Reasoning: [brief explanation of your assessment]
+Respond in EXACTLY this format (be concise - max 2 sentences each):
+Summary: [1-2 sentences: what this file contains]
+Assessment: [KEEP or DELETE]
+Confidence: [HIGH, MEDIUM, or LOW]
+Reasoning: [1-2 sentences: why DELETE or KEEP]
 
-Guidelines:
-- DELETE if: temporary, outdated, backup, test file, obsolete content
-- KEEP if: important documents, active projects, valuable data
-- HIGH confidence: clearly obsolete or clearly important
-- MEDIUM confidence: likely can be deleted but review recommended
-- LOW confidence: uncertain, needs human judgment"""
+Rules:
+- DELETE: temporary, outdated, backup, test files, transient commercial content
+- KEEP: personal records, important docs, active projects, receipts, contracts
+- Be concise and direct"""
 
         try:
             # Prepare request body for Bedrock
@@ -1689,33 +1689,6 @@ def interactive_cleanup(service, report_file, folder_id):
                             current_line = "  " + word + " "
                     if current_line.strip():
                         print(format_box_line(current_line.rstrip(), color_code=RED))
-
-        # Print Claude's assessment if available
-        if entry.get('claude_assessment'):
-            print(format_box_separator("─", color_code=RED))
-            print(format_box_line("Claude AI Assessment:", color_code=RED))
-
-            # Show decision and confidence
-            decision = entry.get('claude_assessment', 'N/A')
-            confidence = entry.get('claude_confidence', 'N/A')
-            print(format_box_line(f"  Decision: {decision}", color_code=RED))
-            print(format_box_line(f"  Confidence: {confidence}", color_code=RED))
-
-            # Show reasoning if available
-            if entry.get('claude_reasoning'):
-                print(format_box_line("  Reasoning:", color_code=RED))
-                reasoning = entry['claude_reasoning']
-                # Word wrap reasoning
-                words = reasoning.split()
-                current_line = "    "
-                for word in words:
-                    if len(current_line + word + " ") <= BOX_MAX_TEXT_WIDTH:
-                        current_line += word + " "
-                    else:
-                        print(format_box_line(current_line.rstrip(), color_code=RED))
-                        current_line = "    " + word + " "
-                if current_line.strip():
-                    print(format_box_line(current_line.rstrip(), color_code=RED))
 
         # Print options
         print(format_box_separator("═", color_code=RED))

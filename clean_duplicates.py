@@ -43,9 +43,16 @@ from google_auth_oauthlib.flow import InstalledAppFlow
 from google.auth.transport.requests import Request
 
 # Import shared modules
-from config import SCOPES_READONLY, SCOPES_WRITE, STATE_DIR, REPORTS_DIR, LOGS_DIR, CHECKSUMS_CACHE_FILE
+from config import SCOPES_READONLY, SCOPES_WRITE, STATE_DIR, REPORTS_DIR, LOGS_DIR, CHECKSUMS_DIR, CHECKSUMS_CACHE_FILE
 from utils import setup_file_logging, extract_folder_id
 from cleanup_core import interactive_cleanup
+
+# Create directories
+import os
+os.makedirs(STATE_DIR, exist_ok=True)
+os.makedirs(REPORTS_DIR, exist_ok=True)
+os.makedirs(LOGS_DIR, exist_ok=True)
+os.makedirs(CHECKSUMS_DIR, exist_ok=True)
 
 # ============================================================================
 # AUTHENTICATION
