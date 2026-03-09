@@ -1083,7 +1083,10 @@ class FileAnalyzer:
                         candidate['summary'] = summary
                         self.stats['content_analyzed'] += 1
                 else:
-                    logger.debug(f"No text extracted for {candidate['name']}")
+                    # No text extracted - log at INFO level and provide fallback message
+                    logger.info(f"  ⚠ No text extracted from {candidate['name']} (may be scanned image, encrypted, or corrupted)")
+                    candidate['summary'] = "[Content extraction failed - file may be a scanned image, encrypted, or corrupted]"
+                    self.stats['content_analyzed'] += 1
             except Exception as e:
                 logger.debug(f"Error analyzing content for {candidate['name']}: {e}")
 
