@@ -493,9 +493,11 @@ Guidelines:
 
             # Validate we got the key fields
             if result['summary'] and result['assessment']:
+                logger.debug(f"Claude analysis successful for {file_name}: {result['assessment']}/{result.get('confidence', 'N/A')}")
                 return result
             else:
-                logger.debug(f"Incomplete Claude response: {full_text}")
+                logger.warning(f"Incomplete Claude response for {file_name}. Got: {result}")
+                logger.debug(f"Full Claude response: {full_text}")
                 return None
 
         except Exception as e:
@@ -977,6 +979,7 @@ class FileAnalyzer:
                 if text:
                     # Use Claude for intelligent summary if available
                     if self.use_claude and self.bedrock_client:
+                        logger.debug(f"Requesting Claude analysis for: {candidate['name']}")
                         claude_result = ContentExtractor.create_claude_summary(
                             text,
                             candidate['name'],
@@ -986,6 +989,7 @@ class FileAnalyzer:
                         if claude_result:
                             # Use Claude's summary
                             candidate['summary'] = claude_result['summary']
+                            logger.debug(f"Using Claude summary for: {candidate['name']}")
 
                             # Use Claude's confidence if available and assessment is DELETE
                             if claude_result.get('assessment') == 'DELETE' and claude_result.get('confidence'):
@@ -1022,11 +1026,13 @@ class FileAnalyzer:
                             self.stats['content_analyzed'] += 1
                         else:
                             # Claude failed, use fallback
+                            logger.info(f"  Claude analysis failed for {candidate['name']}, using fallback summary")
                             summary = ContentExtractor.create_summary(text, max_words=MAX_SUMMARY_WORDS)
                             candidate['summary'] = summary
                             self.stats['content_analyzed'] += 1
                     else:
                         # No Claude, use simple summary
+                        logger.debug(f"Claude not enabled, using simple summary for: {candidate['name']}")
                         summary = ContentExtractor.create_summary(text, max_words=MAX_SUMMARY_WORDS)
                         candidate['summary'] = summary
                         self.stats['content_analyzed'] += 1
@@ -1369,19 +1375,35 @@ def format_box_line(text, width=BOX_WIDTH, color_code=None):
     # Account for "║ " and " ║" (4 characters total)
     max_text_width = width - 2
 
-    # Calculate visible length (accounting for color codes)
-    # Remove ANSI color codes for length calculation
+    # Calculate visible length (accounting for color codes and invisible Unicode)
     import re
+    import unicodedata
+
+    # First, remove ANSI color codes
     visible_text = re.sub(r'\x1b\[[0-9;]+m', '', text)
 
+    # Remove invisible Unicode characters (BOM, zero-width spaces, etc.)
+    # Keep the original text but calculate length based on visible characters
+    cleaned_for_length = ''.join(
+        char for char in visible_text
+        if unicodedata.category(char) not in ['Cf', 'Cc']  # Format/Control characters
+    )
+
+    # Also strip BOM specifically
+    cleaned_for_length = cleaned_for_length.replace('\ufeff', '')  # BOM
+    cleaned_for_length = cleaned_for_length.replace('\u200b', '')  # Zero-width space
+
+    visible_length = len(cleaned_for_length)
+
     # Ensure text doesn't exceed max width (truncate if needed)
-    if len(visible_text) > max_text_width:
-        # Truncate to fit
-        text = text[:max_text_width]
-        visible_text = visible_text[:max_text_width]
+    if visible_length > max_text_width:
+        # Truncate to fit - use cleaned version
+        excess = visible_length - max_text_width
+        text = text[:len(text) - excess]
+        visible_length = max_text_width
 
     # Pad with spaces to exact width based on visible length
-    padding = max_text_width - len(visible_text)
+    padding = max_text_width - visible_length
     line = "║ " + text + " " * padding + " ║"
 
     if color_code:
@@ -1586,7 +1608,17 @@ def interactive_cleanup(service, report_file, folder_id):
         if entry['summary']:
             print(format_box_separator("─", color_code=RED))
             print(format_box_line("Content Summary:", color_code=RED))
-            summary_lines = entry['summary'].split('\n')
+
+            # Clean summary text (remove BOM and other invisible characters)
+            import unicodedata
+            cleaned_summary = entry['summary'].replace('\ufeff', '').replace('\u200b', '')
+            # Remove other control/format characters
+            cleaned_summary = ''.join(
+                char for char in cleaned_summary
+                if unicodedata.category(char) not in ['Cf']  # Format characters
+            )
+
+            summary_lines = cleaned_summary.split('\n')
             for line in summary_lines:
                 # Wrap long lines
                 if len(line) <= BOX_CONTENT_MAX_WIDTH:
