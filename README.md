@@ -6,7 +6,7 @@ Intelligent Google Drive cleanup tool with Claude AI analysis via AWS Bedrock.
 
 - 🤖 **Claude AI Analysis**: Intelligent content summarization using AWS Bedrock
 - 🔍 **Smart Detection**: Identifies obsolete files while protecting photos, videos, and music
-- 🔗 **Duplicate Detection**: Automatically finds duplicate files by MD5 checksum and marks them for deletion with HIGH confidence
+- 🔗 **Duplicate Detection**: Automatically finds duplicate files by MD5 checksum (including Google Docs, Sheets, Slides) and marks them for deletion with HIGH confidence
 - 📄 **Content Extraction**: Reads PDFs, Word docs, Excel files, and Google Docs
 - ⚡ **Single-Key Controls**: Fast interactive cleanup with no Enter key needed
 - 📊 **Comprehensive Logging**: Full session logs and file tracking
@@ -177,13 +177,37 @@ For faster duplicate detection, the tool caches MD5 checksums of all files in yo
 **Force refresh the cache:**
 ```bash
 # Rescan entire Drive to update checksum cache
-uv run python clean_obsolete.py FOLDER_ID --refresh_checksums
+uv run python clean_duplicates.py --checksums
 ```
 
 **When to refresh:**
 - After adding/modifying many files in your Drive
 - If duplicate detection seems outdated
 - Cache file is automatically created/updated as needed
+
+### Google Workspace File Duplicate Detection
+
+The tool now detects duplicates in Google Workspace files (Docs, Sheets, Slides, Drawings) by:
+
+1. **Exporting to Office formats:**
+   - Google Docs → .docx (Word)
+   - Google Sheets → .xlsx (Excel)
+   - Google Slides → .pptx (PowerPoint)
+   - Google Drawings → .pdf
+
+2. **Computing content MD5:**
+   - MD5 checksum is computed from exported content
+   - Allows accurate duplicate detection even with different file names
+
+3. **Caching for performance:**
+   - Workspace content MD5s are cached
+   - Subsequent scans are fast (no re-export needed)
+
+**Example duplicate reasons:**
+- "Duplicate content (workspace file) - original at: Folder/Doc.gdoc"
+- "Duplicate file - original at: Folder/Document.pdf" (for binary files)
+
+**Note:** The first scan with `--checksums` will be slower as it exports workspace files, but subsequent runs will be fast using the cache.
 
 ## Logging
 
