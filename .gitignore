@@ -35,6 +35,7 @@ token_write.pickle
 state/
 reports/
 logs/
+checksums/
 
 # IDE
 .vscode/
