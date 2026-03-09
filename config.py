@@ -12,6 +12,10 @@ REPORTS_DIR = 'reports'
 LOGS_DIR = 'logs'
 PROMPTS_DIR = 'prompts'
 
+# Cache files
+import os
+CHECKSUMS_CACHE_FILE = os.path.join(STATE_DIR, 'drive_checksums_cache.json')
+
 # UI Box formatting constants
 BOX_WIDTH = 78
 BOX_TOTAL_WIDTH = 80  # BOX_WIDTH + 2 for borders
