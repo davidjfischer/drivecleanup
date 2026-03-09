@@ -72,9 +72,6 @@ STATE_DIR = 'state'
 REPORTS_DIR = 'reports'
 LOGS_DIR = 'logs'
 
-# Cache file for MD5 checksums
-CHECKSUMS_CACHE_FILE = os.path.join(STATE_DIR, 'drive_checksums_cache.json')
-
 # UI Box formatting constants
 BOX_WIDTH = 78
 BOX_TOTAL_WIDTH = 80  # BOX_WIDTH + 2 for borders
@@ -498,7 +495,7 @@ class FileAnalyzer:
                 self.use_claude = False
 
         self.all_files = []
-        self.all_folders = []  # All folders (including from duplicate scan)
+        self.all_folders = []  # All folders found during scan
         self.scanned_folders = []  # Only folders from current scan (for empty folder detection)
         self.delete_candidates = {
             'HIGH': [],  # Very confident to delete
@@ -510,17 +507,12 @@ class FileAnalyzer:
             'total_folders': 0,
             'total_size': 0,
             'potential_savings': 0,
-            'content_analyzed': 0,
-            'duplicates_found': 0
+            'content_analyzed': 0
         }
-        # Track files by MD5 hash for duplicate detection
-        self.md5_to_files = defaultdict(list)
         # Track folder IDs to names for building paths
         self.folder_id_to_name = {}
         # Track folder IDs to their parent IDs for path traversal
         self.folder_id_to_parents = {}
-        # Flag to track if we've done a Drive-wide duplicate scan
-        self.duplicate_scan_done = False
 
     def __del__(self):
         """Cleanup when analyzer is destroyed."""
@@ -688,7 +680,7 @@ class FileAnalyzer:
                     results = self.service.files().list(
                         pageSize=1000,
                         pageToken=page_token,
-                        fields="nextPageToken, files(id, name, mimeType, size, modifiedTime, viewedByMeTime, parents, trashed, webViewLink, md5Checksum)",
+                        fields="nextPageToken, files(id, name, mimeType, size, modifiedTime, viewedByMeTime, parents, trashed, webViewLink)",
                         q=f"'{current_folder}' in parents and trashed=false and 'me' in owners"
                     ).execute()
 
@@ -720,10 +712,6 @@ class FileAnalyzer:
                             if 'size' in item:
                                 self.stats['total_size'] += int(item['size'])
 
-                            # Track files by MD5 for duplicate detection (if available)
-                            # Only if we haven't done a Drive-wide duplicate scan yet
-                            if not self.duplicate_scan_done and 'md5Checksum' in item:
-                                self.md5_to_files[item['md5Checksum']].append(item)
 
                         if scanned_count >= max_files:
                             logger.warning(f"Reached maximum scan limit of {max_files} files")
@@ -757,7 +745,7 @@ class FileAnalyzer:
                 results = self.service.files().list(
                     pageSize=1000,
                     pageToken=page_token,
-                    fields="nextPageToken, files(id, name, mimeType, size, modifiedTime, viewedByMeTime, parents, trashed, webViewLink, md5Checksum)",
+                    fields="nextPageToken, files(id, name, mimeType, size, modifiedTime, viewedByMeTime, parents, trashed, webViewLink)",
                     q="trashed=false and 'me' in owners"
                 ).execute()
 
@@ -787,10 +775,6 @@ class FileAnalyzer:
                         if 'size' in item:
                             self.stats['total_size'] += int(item['size'])
 
-                        # Track files by MD5 for duplicate detection (if available)
-                        # Only if we haven't done a Drive-wide duplicate scan yet
-                        if not self.duplicate_scan_done and 'md5Checksum' in item:
-                            self.md5_to_files[item['md5Checksum']].append(item)
 
                     if scanned >= max_files:
                         logger.warning(f"Reached maximum scan limit of {max_files} files")
@@ -806,51 +790,6 @@ class FileAnalyzer:
 
         logger.info(f"Scan complete: {self.stats['total_files']} files, {self.stats['total_folders']} folders")
         logger.info(f"Total size: {self.stats['total_size'] / (1024**3):.2f} GB")
-
-    def load_checksums_from_cache(self):
-        """Load MD5 checksums from cache created by clean_duplicates.py.
-
-        Note: This script does NOT build or refresh the cache. Use clean_duplicates.py
-        with --checksums flag to build/refresh the checksum cache.
-        """
-        if not os.path.exists(CHECKSUMS_CACHE_FILE):
-            logger.warning("=" * 80)
-            logger.warning("MD5 checksum cache not found!")
-            logger.warning("Duplicate detection will be skipped.")
-            logger.warning("")
-            logger.warning("To enable duplicate detection, run:")
-            logger.warning("  python clean_duplicates.py --checksums")
-            logger.warning("=" * 80)
-            logger.warning("")
-            return
-
-        logger.info("Loading MD5 checksums and folder structure from cache...")
-        try:
-            with open(CHECKSUMS_CACHE_FILE, 'r', encoding='utf-8') as f:
-                cache_data = json.load(f)
-
-            # Reconstruct md5_to_files from cache
-            for md5, files_list in cache_data.get('checksums', {}).items():
-                self.md5_to_files[md5] = files_list
-
-            # Reconstruct folder_id_to_name and folder_id_to_parents from cache
-            self.folder_id_to_name.update(cache_data.get('folders', {}))
-            self.folder_id_to_parents.update(cache_data.get('folder_parents', {}))
-
-            total_files = sum(len(files) for files in self.md5_to_files.values())
-            logger.info(f"Loaded {total_files} files with MD5 checksums from cache")
-            logger.info(f"Loaded {len(self.folder_id_to_name)} folder mappings from cache")
-            logger.info(f"Found {len(self.md5_to_files)} unique checksums")
-
-            if total_files == 0:
-                logger.warning("Cache is empty. Run: python clean_duplicates.py --checksums")
-            else:
-                # Mark that we've loaded duplicate data
-                self.duplicate_scan_done = True
-
-        except Exception as e:
-            logger.warning(f"Failed to load cache: {e}")
-            logger.warning("Duplicate detection will be skipped.")
 
     def get_file_path(self, file_item):
         """Build the full path to a file from its parent folders."""
@@ -888,123 +827,9 @@ class FileAnalyzer:
         """Analyze all files for deletion candidates."""
         logger.info("Analyzing files for deletion candidates...")
 
-        # Create a set of file IDs in the scanned folder for quick lookup
-        scanned_file_ids = {file_item['id'] for file_item in self.all_files}
-
-        # First, detect duplicates (only for files in the scanned folder)
-        logger.info("Checking for duplicate files by MD5 checksum...")
-        duplicates_found = 0
-        for md5, files_with_hash in self.md5_to_files.items():
-            if len(files_with_hash) > 1:
-                # Check if any of these duplicates are in our scanned folder
-                duplicates_in_folder = [f for f in files_with_hash if f['id'] in scanned_file_ids]
-
-                if not duplicates_in_folder:
-                    # None of these duplicates are in our folder, skip
-                    continue
-
-                # NEW LOGIC: Mark ALL files in scanned folder as duplicates
-                # Find a file OUTSIDE the scanned folder to use as "original" reference
-                files_outside_folder = [f for f in files_with_hash if f['id'] not in scanned_file_ids]
-
-                if files_outside_folder:
-                    # Use oldest file outside scanned folder as reference
-                    sorted_outside = sorted(files_outside_folder, key=lambda f: f.get('modifiedTime', ''), reverse=False)
-                    original_file = sorted_outside[0]
-                    original_path = self.get_file_path(original_file)
-
-                    # Mark ALL files in scanned folder as duplicates
-                    for duplicate_file in duplicates_in_folder:
-                        mime_type = duplicate_file.get('mimeType', '')
-
-                        # Check if this is a protected media file
-                        media_mime_types = [
-                            'image/', 'video/', 'audio/',
-                            'application/vnd.google-apps.photo',
-                            'application/vnd.google-apps.video'
-                        ]
-                        is_media = any(mime_type.startswith(prefix) for prefix in media_mime_types)
-
-                        # Only mark duplicate if it's NOT a media file (photos/videos are protected)
-                        if not is_media:
-                            duplicates_found += 1
-                            duplicate_path = self.get_file_path(duplicate_file)
-                            candidate = {
-                                'id': duplicate_file['id'],
-                                'name': duplicate_file['name'],
-                                'path': duplicate_path,
-                                'size': int(duplicate_file.get('size', 0)) if 'size' in duplicate_file else 0,
-                                'modified': duplicate_file.get('modifiedTime'),
-                                'viewed': duplicate_file.get('viewedByMeTime'),
-                                'reasons': [f"Duplicate file - original at: {original_path}"],
-                                'link': duplicate_file.get('webViewLink', 'N/A'),
-                                'age_days': 0,
-                                'mime_type': mime_type,
-                                'summary': None
-                            }
-
-                            self.delete_candidates['HIGH'].append(candidate)
-                            if 'size' in duplicate_file:
-                                self.stats['potential_savings'] += int(duplicate_file['size'])
-                        else:
-                            logger.debug(f"Skipping duplicate media file (protected): {duplicate_file.get('name', 'Unknown')}")
-                else:
-                    # All duplicates are in scanned folder - keep oldest, mark rest as duplicates
-                    sorted_in_folder = sorted(duplicates_in_folder, key=lambda f: f.get('modifiedTime', ''), reverse=False)
-                    original_file = sorted_in_folder[0]
-                    original_path = self.get_file_path(original_file)
-
-                    # Mark all except the oldest as duplicates
-                    for duplicate_file in sorted_in_folder[1:]:
-                        mime_type = duplicate_file.get('mimeType', '')
-
-                        # Check if this is a protected media file
-                        media_mime_types = [
-                            'image/', 'video/', 'audio/',
-                            'application/vnd.google-apps.photo',
-                            'application/vnd.google-apps.video'
-                        ]
-                        is_media = any(mime_type.startswith(prefix) for prefix in media_mime_types)
-
-                        # Only mark duplicate if it's NOT a media file (photos/videos are protected)
-                        if not is_media:
-                            duplicates_found += 1
-                            duplicate_path = self.get_file_path(duplicate_file)
-                            candidate = {
-                                'id': duplicate_file['id'],
-                                'name': duplicate_file['name'],
-                                'path': duplicate_path,
-                                'size': int(duplicate_file.get('size', 0)) if 'size' in duplicate_file else 0,
-                                'modified': duplicate_file.get('modifiedTime'),
-                                'viewed': duplicate_file.get('viewedByMeTime'),
-                                'reasons': [f"Duplicate file (in same folder) - keep oldest at: {original_path}"],
-                                'link': duplicate_file.get('webViewLink', 'N/A'),
-                                'age_days': 0,
-                                'mime_type': mime_type,
-                                'summary': None
-                            }
-
-                            self.delete_candidates['HIGH'].append(candidate)
-                            if 'size' in duplicate_file:
-                                self.stats['potential_savings'] += int(duplicate_file['size'])
-                        else:
-                            logger.debug(f"Skipping duplicate media file (protected): {duplicate_file.get('name', 'Unknown')}")
-
-        self.stats['duplicates_found'] = duplicates_found
-        if duplicates_found > 0:
-            logger.info(f"Found {duplicates_found} duplicate files in scanned folder")
-
-        # Create set of duplicate file IDs to skip in main analysis
-        duplicate_file_ids = {candidate['id'] for candidate in self.delete_candidates['HIGH']
-                             if any('Duplicate file' in reason for reason in candidate.get('reasons', []))}
-
         for i, file_item in enumerate(self.all_files):
             if (i + 1) % 500 == 0:
                 logger.info(f"Analyzed {i + 1}/{self.stats['total_files']} files...")
-
-            # Skip files already marked as duplicates
-            if file_item['id'] in duplicate_file_ids:
-                continue
 
             name = file_item.get('name', 'Unknown')
             size = int(file_item.get('size', 0)) if 'size' in file_item else 0
@@ -1049,7 +874,7 @@ class FileAnalyzer:
                     self.stats['potential_savings'] += size
 
         logger.info(f"Analysis complete!")
-        logger.info(f"Found {len(self.delete_candidates['HIGH'])} HIGH confidence candidates (including {self.stats['duplicates_found']} duplicates)")
+        logger.info(f"Found {len(self.delete_candidates['HIGH'])} HIGH confidence candidates")
         logger.info(f"Found {len(self.delete_candidates['MEDIUM'])} MEDIUM confidence candidates")
         logger.info(f"Found {len(self.delete_candidates['LOW'])} LOW confidence candidates")
         logger.info(f"Potential space savings: {self.stats['potential_savings'] / (1024**3):.2f} GB")
@@ -1082,18 +907,11 @@ class FileAnalyzer:
 
         extractable = [c for c in all_candidates if c['mime_type'] in extractable_mimes or c['mime_type'].startswith('text/')]
 
-        # Filter out duplicates and skipped files
+        # Filter out skipped files
         filtered_extractable = []
         skipped_count = 0
-        duplicate_count = 0
 
         for candidate in extractable:
-            # Skip if this is a duplicate file
-            is_duplicate = any('Duplicate file' in reason for reason in candidate.get('reasons', []))
-            if is_duplicate:
-                duplicate_count += 1
-                continue
-
             # Skip if this file was already skipped in a previous run
             if candidate['id'] in self.skipped_files:
                 skipped_count += 1
@@ -1101,8 +919,6 @@ class FileAnalyzer:
 
             filtered_extractable.append(candidate)
 
-        if duplicate_count > 0:
-            logger.info(f"Skipping content analysis for {duplicate_count} duplicate files")
         if skipped_count > 0:
             logger.info(f"Skipping content analysis for {skipped_count} previously skipped files")
 
@@ -1270,7 +1086,6 @@ class FileAnalyzer:
                 "total_folders_scanned": self.stats['total_folders'],
                 "total_size_bytes": self.stats['total_size'],
                 "total_size_gb": round(self.stats['total_size'] / (1024**3), 2),
-                "duplicates_found": self.stats['duplicates_found'],
                 "content_analyzed": self.stats['content_analyzed'] if self.analyze_content else 0,
                 "delete_candidates": {
                     "HIGH": len([c for c in self.delete_candidates['HIGH'] if 'id' in c]),
@@ -1633,9 +1448,9 @@ def interactive_cleanup(service, report_file, folder_id):
         print(format_box_line(f"File {i + 1}/{len(entries)} - {entry['confidence']} CONFIDENCE", color_code=RED))
         print(format_box_separator("═", color_code=RED))
 
-        # For duplicates, show full path instead of just name
+        # Show full path if available, otherwise just show name
         if entry.get('path'):
-            # Show full path for duplicates
+            # Show full path
             path = entry['path']
             if len(path) <= 68:
                 print(format_box_line(f"Path: {path}", color_code=RED))
@@ -2047,10 +1862,7 @@ Examples:
 
         # Scan drive (folder-specific or entire drive)
         if folder_id:
-            # For folder scans, first load checksums from cache for duplicate detection
-            # Note: Cache is built by clean_duplicates.py --checksums
-            analyzer.load_checksums_from_cache()
-            # Then scan the specific folder in detail
+            # Scan the specific folder in detail
             analyzer.scan_folder(folder_id, max_files=args.max_files)
         else:
             analyzer.scan_drive(max_files=args.max_files)
