@@ -45,36 +45,78 @@ uv sync
    - Ensure you have AWS credentials configured (`~/.aws/credentials`)
    - Enable Claude model access in your AWS Bedrock console
 
+## Two Scripts, Two Purposes
+
+DriveCleanup consists of two specialized scripts:
+
+### 1. `clean_duplicates.py` - Fast Duplicate Detection
+- **Purpose:** Find and remove duplicate files based on MD5 checksums
+- **Speed:** Fast (uses checksums)
+- **Scope:** Entire Google Drive
+- **Use when:** You want to remove exact duplicates
+
+```bash
+# Build checksum cache
+python clean_duplicates.py --checksums
+
+# Find and clean duplicates
+python clean_duplicates.py --clean FOLDER_ID
+```
+
+### 2. `clean_obsolete.py` - Intelligent Content Analysis
+- **Purpose:** Find and remove obsolete files (old, temp, backup, etc.)
+- **Speed:** Slower (analyzes content)
+- **Scope:** Specific folder
+- **Use when:** You want to remove old, unnecessary files
+
+```bash
+# Analyze and clean
+python clean_obsolete.py FOLDER_ID
+```
+
+### Recommended Workflow
+
+For best results, run both scripts in sequence:
+
+```bash
+# Step 1: Remove duplicates (fast)
+python clean_duplicates.py --checksums --clean FOLDER_ID
+
+# Step 2: Remove obsolete files (slower but thorough)
+python clean_obsolete.py FOLDER_ID
+```
+
 ## Usage
 
-### Full Workflow (Refresh + Analyze + Interactive Cleanup)
+### Full Workflow (Content Analysis + Interactive Cleanup)
 
 ```bash
 uv run python clean_obsolete.py "https://drive.google.com/drive/folders/YOUR_FOLDER_ID"
 ```
 
+**For duplicate detection**, first run:
+```bash
+uv run python clean_duplicates.py --checksums
+```
+
 ### Workflow Steps (Flexible Combinations)
 
-The tool supports three independent workflow steps that can be combined:
+The tool supports two independent workflow steps:
 
 ```bash
-# Refresh checksum cache only
-uv run python clean_obsolete.py FOLDER_ID --refresh_checksums
-
 # Analysis only
 uv run python clean_obsolete.py FOLDER_ID --analyze
 
 # Cleanup only (uses existing report)
 uv run python clean_obsolete.py FOLDER_ID --clean
 
-# Refresh + Analyze (skip cleanup)
-uv run python clean_obsolete.py FOLDER_ID --refresh_checksums --analyze
-
-# Analyze + Cleanup (skip refresh)
-uv run python clean_obsolete.py FOLDER_ID --analyze --clean
+# Both steps together (default)
+uv run python clean_obsolete.py FOLDER_ID
 ```
 
-Steps always execute in order: **Refresh → Analyze → Clean**
+Steps always execute in order: **Analyze → Clean**
+
+**Note:** For duplicate detection, use `clean_duplicates.py --checksums` first to build the checksum cache.
 
 ### Without Claude AI (faster, simpler)
 
