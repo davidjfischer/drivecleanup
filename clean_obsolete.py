@@ -807,138 +807,50 @@ class FileAnalyzer:
         logger.info(f"Scan complete: {self.stats['total_files']} files, {self.stats['total_folders']} folders")
         logger.info(f"Total size: {self.stats['total_size'] / (1024**3):.2f} GB")
 
-    def scan_drive_for_duplicates(self, refresh_cache=False):
-        """Lightweight scan of entire Drive to populate MD5 checksums for duplicate detection.
+    def load_checksums_from_cache(self):
+        """Load MD5 checksums from cache created by clean_duplicates.py.
 
-        Args:
-            refresh_cache: If True, ignore cache and rescan entire Drive
+        Note: This script does NOT build or refresh the cache. Use clean_duplicates.py
+        with --checksums flag to build/refresh the checksum cache.
         """
-        # Try to load from cache if not refreshing
-        if not refresh_cache and os.path.exists(CHECKSUMS_CACHE_FILE):
-            logger.info("Loading MD5 checksums and folder structure from cache...")
-            try:
-                with open(CHECKSUMS_CACHE_FILE, 'r', encoding='utf-8') as f:
-                    cache_data = json.load(f)
+        if not os.path.exists(CHECKSUMS_CACHE_FILE):
+            logger.warning("=" * 80)
+            logger.warning("MD5 checksum cache not found!")
+            logger.warning("Duplicate detection will be skipped.")
+            logger.warning("")
+            logger.warning("To enable duplicate detection, run:")
+            logger.warning("  python clean_duplicates.py --checksums")
+            logger.warning("=" * 80)
+            logger.warning("")
+            return
 
-                # Reconstruct md5_to_files from cache
-                for md5, files_list in cache_data.get('checksums', {}).items():
-                    self.md5_to_files[md5] = files_list
-
-                # Reconstruct folder_id_to_name and folder_id_to_parents from cache
-                self.folder_id_to_name.update(cache_data.get('folders', {}))
-                self.folder_id_to_parents.update(cache_data.get('folder_parents', {}))
-
-                total_files = sum(len(files) for files in self.md5_to_files.values())
-                logger.info(f"Loaded {total_files} files with MD5 checksums from cache")
-                logger.info(f"Loaded {len(self.folder_id_to_name)} folder mappings from cache")
-                logger.info(f"Found {len(self.md5_to_files)} unique checksums")
-
-                # If cache is empty, rescan instead of using it
-                if total_files == 0:
-                    logger.warning("Cache is empty, will rescan entire Drive")
-                else:
-                    # Mark that we've loaded duplicate data
-                    self.duplicate_scan_done = True
-                    return  # Cache loaded successfully with data
-            except Exception as e:
-                logger.warning(f"Failed to load cache, will rescan: {e}")
-
-        # Scan entire Drive for checksums and folder structure
-        if refresh_cache:
-            logger.info("Refreshing MD5 checksum cache (scanning entire Drive)...")
-        else:
-            logger.info("Building MD5 checksum cache (scanning entire Drive)...")
-
-        page_token = None
-        scanned_files = 0
-        scanned_folders = 0
-
-        # First, scan all folders to build folder hierarchy
-        logger.info("  Scanning folder structure...")
-        page_token = None
-        while True:
-            try:
-                results = self.service.files().list(
-                    pageSize=1000,
-                    pageToken=page_token,
-                    fields="nextPageToken, files(id, name, parents)",
-                    q="trashed=false and mimeType = 'application/vnd.google-apps.folder' and 'me' in owners"
-                ).execute()
-
-                items = results.get('files', [])
-
-                for item in items:
-                    self.folder_id_to_name[item['id']] = item['name']
-                    # Store parent relationship for path traversal
-                    if 'parents' in item:
-                        self.folder_id_to_parents[item['id']] = item['parents']
-                    # Also store in all_folders for backwards compatibility
-                    self.all_folders.append(item)
-                    scanned_folders += 1
-
-                    if scanned_folders % 500 == 0:
-                        logger.info(f"    Scanned {scanned_folders} folders...")
-
-                page_token = results.get('nextPageToken')
-                if not page_token:
-                    break
-
-            except Exception as e:
-                logger.error(f"Error scanning folders: {e}")
-                break
-
-        logger.info(f"  Scanned {scanned_folders} folders")
-
-        # Now scan all files with MD5 checksums
-        logger.info("  Scanning files for checksums...")
-        page_token = None
-        while True:
-            try:
-                results = self.service.files().list(
-                    pageSize=1000,
-                    pageToken=page_token,
-                    fields="nextPageToken, files(id, name, mimeType, parents, md5Checksum)",
-                    q="trashed=false and mimeType != 'application/vnd.google-apps.folder' and 'me' in owners"
-                ).execute()
-
-                items = results.get('files', [])
-
-                for item in items:
-                    scanned_files += 1
-
-                    if scanned_files % 500 == 0:
-                        logger.info(f"    Scanned {scanned_files} files...")
-
-                    # Track files by MD5 for duplicate detection (if available)
-                    if 'md5Checksum' in item:
-                        self.md5_to_files[item['md5Checksum']].append(item)
-
-                page_token = results.get('nextPageToken')
-                if not page_token:
-                    break
-
-            except Exception as e:
-                logger.error(f"Error scanning files for duplicates: {e}")
-                break
-
-        logger.info(f"Duplicate scan complete: scanned {scanned_files} files and {scanned_folders} folders across entire Drive")
-
-        # Save to cache (checksums and folder structure)
+        logger.info("Loading MD5 checksums and folder structure from cache...")
         try:
-            logger.debug(f"Saving MD5 checksum cache to {CHECKSUMS_CACHE_FILE}")
-            cache_data = {
-                'checksums': dict(self.md5_to_files),
-                'folders': self.folder_id_to_name,
-                'folder_parents': self.folder_id_to_parents
-            }
-            with open(CHECKSUMS_CACHE_FILE, 'w', encoding='utf-8') as f:
-                json.dump(cache_data, f, indent=2)
-            logger.info("MD5 checksum and folder structure cache saved successfully")
-        except Exception as e:
-            logger.warning(f"Failed to save checksum cache: {e}")
+            with open(CHECKSUMS_CACHE_FILE, 'r', encoding='utf-8') as f:
+                cache_data = json.load(f)
 
-        # Mark that we've done a Drive-wide duplicate scan
-        self.duplicate_scan_done = True
+            # Reconstruct md5_to_files from cache
+            for md5, files_list in cache_data.get('checksums', {}).items():
+                self.md5_to_files[md5] = files_list
+
+            # Reconstruct folder_id_to_name and folder_id_to_parents from cache
+            self.folder_id_to_name.update(cache_data.get('folders', {}))
+            self.folder_id_to_parents.update(cache_data.get('folder_parents', {}))
+
+            total_files = sum(len(files) for files in self.md5_to_files.values())
+            logger.info(f"Loaded {total_files} files with MD5 checksums from cache")
+            logger.info(f"Loaded {len(self.folder_id_to_name)} folder mappings from cache")
+            logger.info(f"Found {len(self.md5_to_files)} unique checksums")
+
+            if total_files == 0:
+                logger.warning("Cache is empty. Run: python clean_duplicates.py --checksums")
+            else:
+                # Mark that we've loaded duplicate data
+                self.duplicate_scan_done = True
+
+        except Exception as e:
+            logger.warning(f"Failed to load cache: {e}")
+            logger.warning("Duplicate detection will be skipped.")
 
     def get_file_path(self, file_item):
         """Build the full path to a file from its parent folders."""
@@ -2042,12 +1954,6 @@ Examples:
         help='Minimum age in days for files to be considered for deletion (default: 90)'
     )
 
-    parser.add_argument(
-        '--refresh_checksums',
-        action='store_true',
-        help='Force refresh of MD5 checksum cache by rescanning entire Drive'
-    )
-
     args = parser.parse_args()
 
     # Record start time for logging
@@ -2069,20 +1975,16 @@ Examples:
     setup_file_logging(folder_id, start_time)
 
     # Determine which operations to run
-    # If no flags specified, run all steps
-    if not args.refresh_checksums and not args.analyze and not args.clean:
-        run_refresh = True
+    # If no flags specified, run both analyze and clean
+    if not args.analyze and not args.clean:
         run_analyze = True
         run_clean = True
-        logger.info("Mode: Full workflow (Refresh + Analyze + Clean)")
+        logger.info("Mode: Full workflow (Analyze + Clean)")
     else:
-        run_refresh = args.refresh_checksums
         run_analyze = args.analyze
         run_clean = args.clean
 
         steps = []
-        if run_refresh:
-            steps.append("Refresh")
         if run_analyze:
             steps.append("Analyze")
         if run_clean:
@@ -2090,27 +1992,6 @@ Examples:
         logger.info(f"Mode: {' + '.join(steps)}")
 
     logger.info("")
-
-    # ========================================================================
-    # REFRESH CHECKSUMS PHASE
-    # ========================================================================
-    if run_refresh:
-        logger.info("=" * 80)
-        logger.info("PHASE: REFRESH CHECKSUMS")
-        logger.info("=" * 80)
-
-        # Authenticate (read-only)
-        logger.info("Authenticating with Google Drive API...")
-        service = authenticate(write_access=False)
-        logger.info("Authentication successful!")
-
-        # Create temporary analyzer just for refresh
-        temp_analyzer = FileAnalyzer(service)
-        temp_analyzer.scan_drive_for_duplicates(refresh_cache=True)
-
-        logger.info("")
-        logger.info("✅ Checksum cache refreshed successfully")
-        logger.info("")
 
     # ========================================================================
     # ANALYSIS PHASE
@@ -2166,9 +2047,9 @@ Examples:
 
         # Scan drive (folder-specific or entire drive)
         if folder_id:
-            # For folder scans, first scan entire Drive for duplicate detection
-            # refresh_cache=False because refresh is now a separate phase
-            analyzer.scan_drive_for_duplicates(refresh_cache=False)
+            # For folder scans, first load checksums from cache for duplicate detection
+            # Note: Cache is built by clean_duplicates.py --checksums
+            analyzer.load_checksums_from_cache()
             # Then scan the specific folder in detail
             analyzer.scan_folder(folder_id, max_files=args.max_files)
         else:
